@@ -5,6 +5,10 @@ pyyaml>=6.0.1
 python-dotenv>=1.0.0
 web3>=6.15.0
 
+# MT5 venue (optional — only needed for venue: mt5). Client side only; the
+# MetaTrader5 package itself runs on the remote Windows/Wine box, not here.
+mt5linux>=0.1.9
+
 # macOS menu bar (optional — auto-installed by install-macos.sh)
 # rumps>=0.4.0
 # pyobjc-framework-Cocoa>=10.0

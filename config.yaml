@@ -2,7 +2,7 @@ symbol: BTC/USDT
 timeframe: 15m
 higher_timeframe: 1h
 
-# Venue: cex (Binance via CCXT) | evm (on-chain DEX)
+# Venue: cex (Binance via CCXT) | evm (on-chain DEX) | mt5 (MetaTrader 5 bridge)
 venue: cex
 
 # SMC parameters
@@ -23,6 +23,13 @@ poll_interval_sec: 30
 # EVM settings (when venue: evm)
 evm_chain: base
 evm_slippage_pct: 0.5
+
+# MT5 settings (when venue: mt5) — connection details go in .env
+# Symbol name must match your broker exactly, including any suffix
+# (e.g. EURUSD, XAUUSD, BTCUSD, EURUSD.r). Timeframe reuses the same
+# strings as above (1m/5m/15m/30m/1h/4h/1d).
+mt5_symbol: EURUSD
+mt5_timeframe: 15m
 
 # Backtest defaults
 backtest_bars: 2000
