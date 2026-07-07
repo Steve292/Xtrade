@@ -1,0 +1,28 @@
+symbol: BTC/USDT
+timeframe: 15m
+higher_timeframe: 1h
+
+# Venue: cex (Binance via CCXT) | evm (on-chain DEX)
+venue: cex
+
+# SMC parameters
+swing_lookback: 5
+order_block_lookback: 20
+fvg_min_size_pct: 0.001
+liquidity_tolerance_pct: 0.0005
+
+# Risk management
+risk_per_trade_pct: 1.0
+reward_risk_ratio: 2.0
+max_open_trades: 1
+
+# Paper trading
+initial_balance: 10000.0
+poll_interval_sec: 30
+
+# EVM settings (when venue: evm)
+evm_chain: base
+evm_slippage_pct: 0.5
+
+# Backtest defaults
+backtest_bars: 2000
