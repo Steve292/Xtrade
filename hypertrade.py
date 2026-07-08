@@ -25,8 +25,37 @@ from dotenv import load_dotenv
 from bot.hyperliquid.client import HyperliquidClient
 from bot.hyperliquid.trader import HyperliquidTrader
 from bot.screening import ScreenConfig, TradeScreener
-from bot.smc.strategy import SMCStrategy
+from bot.smc.strategy import SMCStrategy, SignalType
 from bot.wallet import DefiWallet
+
+
+def scan_and_report(trader, coins, ltf, htf, account_value, dry_run):
+    rows = trader.scan(coins, ltf, htf, account_value)
+    print(f"{'COIN':<11}{'SIGNAL':<7}{'CONF':>5}  VERDICT")
+    print("-" * 52)
+    approved = []
+    for coin, signal, result, plan, err in rows:
+        if err:
+            print(f"{coin:<11}{'-':<7}{'':>5}  error: {err[:32]}")
+        elif signal.type == SignalType.NONE:
+            print(f"{coin:<11}{'-':<7}{'':>5}  no setup")
+        elif result.approved:
+            print(f"{coin:<11}{signal.type.value.upper():<7}{signal.confidence:>4.0%}  APPROVED")
+            approved.append((coin, signal, result, plan))
+        else:
+            failed = next((c.name for c in result.checks if not c.passed), "?")
+            print(f"{coin:<11}{signal.type.value.upper():<7}{signal.confidence:>4.0%}  rejected — {failed}")
+
+    for coin, signal, result, plan in approved:
+        print(f"\n{coin} APPROVED — full screen:")
+        print(result.table())
+        print(f"  Plan: {plan.side.upper()} ${plan.usd} of {coin} at {plan.leverage}x")
+        if dry_run:
+            print("  -> DRY RUN — no order sent")
+        else:
+            print("  -> firing testnet order:", trader.execute(plan))
+    if not approved:
+        print("\nNo setups cleared the full screen this pass.")
 
 
 def main() -> None:
@@ -37,6 +66,7 @@ def main() -> None:
 
     ap = argparse.ArgumentParser(description="SMC-screened Hyperliquid auto-trader (testnet)")
     ap.add_argument("coin", nargs="?", default="BTC")
+    ap.add_argument("--watchlist", action="store_true", help="scan all configured majors + memecoins")
     ap.add_argument("--live", action="store_true", help="place real testnet orders (needs funded wallet)")
     ap.add_argument("--loop", action="store_true", help="scan continuously")
     ap.add_argument("--risk", type=float, default=cfg.get("risk_per_trade_pct", 1.0))
@@ -69,17 +99,25 @@ def main() -> None:
     # In live mode size against the real funded account; in dry-run use --balance.
     account_value = client.account().account_value if args.live else args.balance
 
+    watch = None
+    if args.watchlist:
+        watch = list(dict.fromkeys((hl.get("majors") or []) + (hl.get("memecoins") or [])))
+
     mode = "LIVE (testnet orders)" if args.live else "DRY RUN (no orders)"
+    target = f"watchlist ({len(watch)} coins)" if watch else args.coin
     print("=" * 60)
     print(f"  SMC auto-trader — Hyperliquid {'testnet' if hl.get('testnet', True) else 'MAINNET'}")
-    print(f"  Coin: {args.coin}   TF: {args.interval}/{args.htf}   Risk: {args.risk}%   Lev: {args.lev}x")
+    print(f"  Scan: {target}   TF: {args.interval}/{args.htf}   Risk: {args.risk}%   Lev: {args.lev}x")
     print(f"  Mode: {mode}   Sizing balance: ${account_value:,.2f}")
     print("=" * 60)
 
     poll = cfg.get("poll_interval_sec", 30)
     try:
         while True:
-            if args.live and client.account().positions:
+            if watch:
+                scan_and_report(trader, watch, args.interval, args.htf, account_value,
+                                dry_run=not args.live)
+            elif args.live and client.account().positions:
                 print(f"[{args.coin}] position already open — skipping scan")
             else:
                 trader.run_once(args.coin, args.interval, args.htf, account_value, dry_run=not args.live)

@@ -85,6 +85,18 @@ class HyperliquidTrader:
             return self.client.long(plan.coin, plan.usd, leverage=plan.leverage)
         return self.client.short(plan.coin, plan.usd, leverage=plan.leverage)
 
+    def scan(self, coins: list[str], ltf: str, htf: str, account_value: float):
+        """Evaluate a list of coins. Returns (coin, signal, result, plan, error) rows;
+        one coin failing (e.g. no candles) never aborts the rest of the scan."""
+        rows = []
+        for coin in coins:
+            try:
+                signal, result, plan = self.evaluate(coin, ltf, htf, account_value)
+                rows.append((coin, signal, result, plan, None))
+            except Exception as e:  # keep scanning the rest of the watchlist
+                rows.append((coin, None, None, None, str(e)))
+        return rows
+
     def run_once(self, coin: str, ltf: str, htf: str, account_value: float, dry_run: bool = True):
         signal, result, plan = self.evaluate(coin, ltf, htf, account_value)
 
