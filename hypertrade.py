@@ -49,11 +49,14 @@ def scan_and_report(trader, coins, ltf, htf, account_value, dry_run):
     for coin, signal, result, plan in approved:
         print(f"\n{coin} APPROVED — full screen:")
         print(result.table())
+        if plan is None:
+            print("  -> approved, but not sizable — fund the wallet (or amount < $10 min). No order.")
+            continue
         print(f"  Plan: {plan.side.upper()} ${plan.usd} of {coin} at {plan.leverage}x")
         if dry_run:
             print("  -> DRY RUN — no order sent")
         else:
-            print("  -> firing testnet order:", trader.execute(plan))
+            print("  -> SNIPING approved testnet order:", trader.execute(plan))
     if not approved:
         print("\nNo setups cleared the full screen this pass.")
 
@@ -96,28 +99,36 @@ def main() -> None:
     screener = TradeScreener(ScreenConfig.from_dict(cfg.get("screening", {})))
     trader = HyperliquidTrader(client, strategy, screener, risk_pct=args.risk, leverage=args.lev)
 
-    # In live mode size against the real funded account; in dry-run use --balance.
-    account_value = client.account().account_value if args.live else args.balance
-
     watch = None
     if args.watchlist:
         watch = list(dict.fromkeys((hl.get("majors") or []) + (hl.get("memecoins") or [])))
 
     mode = "LIVE (testnet orders)" if args.live else "DRY RUN (no orders)"
     target = f"watchlist ({len(watch)} coins)" if watch else args.coin
+    start_balance = client.account().account_value if args.live else args.balance
     print("=" * 60)
     print(f"  SMC auto-trader — Hyperliquid {'testnet' if hl.get('testnet', True) else 'MAINNET'}")
     print(f"  Scan: {target}   TF: {args.interval}/{args.htf}   Risk: {args.risk}%   Lev: {args.lev}x")
-    print(f"  Mode: {mode}   Sizing balance: ${account_value:,.2f}")
+    print(f"  Mode: {mode}   Sizing balance: ${start_balance:,.2f}")
+    if args.live and start_balance == 0:
+        print("  Wallet unfunded — screening only until you fund it via the faucet.")
     print("=" * 60)
 
     poll = cfg.get("poll_interval_sec", 30)
     try:
         while True:
+            # Re-read the live balance/positions each pass so funding the wallet
+            # mid-run automatically arms sniping.
+            if args.live:
+                acct = client.account()
+                account_value, open_positions = acct.account_value, acct.positions
+            else:
+                account_value, open_positions = args.balance, []
+
             if watch:
                 scan_and_report(trader, watch, args.interval, args.htf, account_value,
                                 dry_run=not args.live)
-            elif args.live and client.account().positions:
+            elif args.live and open_positions:
                 print(f"[{args.coin}] position already open — skipping scan")
             else:
                 trader.run_once(args.coin, args.interval, args.htf, account_value, dry_run=not args.live)

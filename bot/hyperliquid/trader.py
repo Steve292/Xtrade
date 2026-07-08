@@ -114,11 +114,15 @@ class HyperliquidTrader:
             print("  -> not traded (failed screening)\n")
             return result
 
+        if plan is None:
+            print("  -> approved, but not sizable — fund the wallet (or amount < $10 min). No order.\n")
+            return result
+
         print(f"  Plan: {plan.side.upper()} ${plan.usd} of {coin} at {plan.leverage}x "
               f"(risk {plan.risk_pct}% of ${account_value:,.2f})")
         if dry_run:
             print("  -> DRY RUN — no order sent (use --live on a funded wallet to fire)\n")
         else:
-            print("  -> firing testnet order...")
+            print("  -> SNIPING approved testnet order...")
             print("  ", self.execute(plan), "\n")
         return result
