@@ -119,7 +119,7 @@ def test_liquidity_sweep_required():
 def test_entry_outside_ote_rejected():
     r = TradeScreener(CFG).screen(_long_signal(110.0), LTF, BULL_HTF)  # at the high, not the pocket
     assert not r.approved
-    assert not next(c for c in r.checks if c.name == "Fibonacci OTE").passed
+    assert not next(c for c in r.checks if c.name == "Fibonacci OTE (final)").passed
 
 
 def test_low_rr_rejected():
