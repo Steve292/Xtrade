@@ -42,3 +42,12 @@ hyperliquid:
   majors: [BTC, ETH, SOL, HYPE, XMR, PAXG]
   # Sample memecoins (k-prefixed = 1000x-denominated on Hyperliquid)
   memecoins: [kPEPE, WIF, POPCAT, FARTCOIN, TRUMP, DOGE, GOAT, MOODENG, PNUT, kBONK, kSHIB, MELANIA]
+
+# Trade screening — a signal must clear ALL of these before it is approved to trade
+screening:
+  min_confidence: 0.55     # SMC confluence score floor
+  min_rr: 2.0              # minimum reward:risk
+  sniper_confidence: 0.65  # confidence required for a "sniper" entry
+  max_stop_pct: 0.02       # tightest invalidation for a sniper entry (2%)
+  ote_low: 0.618           # Fibonacci golden-pocket bounds (OTE zone)
+  ote_high: 0.786

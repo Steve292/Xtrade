@@ -14,7 +14,10 @@ live mid price and the asset's `szDecimals`.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+
+import pandas as pd
 
 
 @dataclass
@@ -83,6 +86,19 @@ class HyperliquidClient:
 
     def mid(self, coin: str) -> float:
         return float(self.info.all_mids()[coin])
+
+    def candles(self, coin: str, interval: str = "15m", lookback_hours: int = 48) -> pd.DataFrame:
+        """OHLCV candles for a coin, shaped like the SMC strategy expects."""
+        now = int(time.time() * 1000)
+        start = now - lookback_hours * 3600 * 1000
+        raw = self.info.candles_snapshot(coin, interval, start, now)
+        if not raw:
+            raise RuntimeError(f"no candles for {coin} {interval}")
+        df = pd.DataFrame(raw)
+        df["timestamp"] = pd.to_datetime(df["t"], unit="ms")
+        for src, dst in (("o", "open"), ("h", "high"), ("l", "low"), ("c", "close"), ("v", "volume")):
+            df[dst] = df[src].astype(float)
+        return df[["timestamp", "open", "high", "low", "close", "volume"]].copy()
 
     def markets(self, names: list[str] | None = None) -> list[Market]:
         universe = self._universe_map()

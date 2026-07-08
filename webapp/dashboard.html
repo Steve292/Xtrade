@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>DeFi Wallet · Hyperliquid Perps</title>
+<style>
+  :root {
+    --bg:#0e0f12; --panel:#16181d; --card:#1b1e24; --line:#262a32;
+    --tx:#e8eaed; --mut:#9aa0aa; --up:#1db980; --dn:#e5484d; --acc:#6c5ce7;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f8; --panel:#fff; --card:#fff; --line:#e6e8ec;
+             --tx:#14161a; --mut:#6b7280; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--tx);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:28px 20px 60px; }
+  .wrap { max-width:1040px; margin:0 auto; }
+  header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  h1 { font-size:22px; font-weight:600; margin:0; }
+  .badge { background:rgba(108,92,231,.16); color:var(--acc); font-size:12px;
+    font-weight:600; padding:4px 10px; border-radius:20px; border:1px solid rgba(108,92,231,.35); }
+  .sub { color:var(--mut); font-size:14px; margin:0 0 22px; }
+  .flow { display:flex; gap:10px; flex-wrap:wrap; background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:26px; }
+  .step { flex:1; min-width:150px; }
+  .step .n { color:var(--acc); font-weight:700; font-size:12px; }
+  .step .t { font-weight:600; font-size:14px; margin:2px 0; }
+  .step .d { color:var(--mut); font-size:12px; }
+  h2 { font-size:15px; font-weight:600; margin:24px 0 12px; letter-spacing:.02em; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  .row1 { display:flex; align-items:center; gap:8px; }
+  .sym { font-weight:600; font-size:15px; }
+  .tag { font-size:10px; text-transform:uppercase; color:var(--mut);
+    border:1px solid var(--line); border-radius:6px; padding:1px 5px; }
+  .lev { margin-left:auto; font-size:11px; color:var(--mut);
+    background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:2px 7px; }
+  .price { font-size:20px; font-weight:600; margin:8px 0 2px; font-variant-numeric:tabular-nums; }
+  .chg { font-size:12px; font-weight:600; }
+  .up { color:var(--up); } .dn { color:var(--dn); }
+  .btns { display:flex; gap:8px; margin-top:12px; }
+  .btns button { flex:1; border:none; border-radius:9px; padding:8px 0; font-weight:600;
+    font-size:13px; cursor:pointer; color:#fff; }
+  .long { background:var(--up); } .short { background:var(--dn); }
+  .btns button:active { transform:scale(.97); }
+  footer { color:var(--mut); font-size:12px; margin-top:30px; text-align:center; }
+  #toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%);
+    background:var(--acc); color:#fff; padding:10px 16px; border-radius:10px;
+    font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
+  #toast.show { opacity:1; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>DeFi Wallet · Hyperliquid Perps</h1>
+    <span class="badge">TESTNET</span>
+  </header>
+  <p class="sub">Long / short BTC, ETH, SOL, HYPE, gold &amp; XMR, plus memecoins — 209 markets, one self-custody wallet. Live testnet prices.</p>
+
+  <div class="flow">
+    <div class="step"><div class="n">01 · DEPOSIT</div><div class="t">Create wallet</div><div class="d">python hyperwallet.py create</div></div>
+    <div class="step"><div class="n">02 · FUND</div><div class="t">Faucet → 1,000 USDC</div><div class="d">free testnet funds</div></div>
+    <div class="step"><div class="n">03 · TRADE</div><div class="t">Long / short, $10 min</div><div class="d">up to 40x leverage</div></div>
+  </div>
+
+  <h2>MAJORS</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="row1"><span class="sym">BTC</span><span class="lev">40x</span></div>
+      <div class="price">$63,648.70</div>
+      <div class="chg dn">-0.57% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','BTC')">Long</button>
+        <button class="short" onclick="cmd('short','BTC')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">ETH</span><span class="lev">25x</span></div>
+      <div class="price">$1,781.70</div>
+      <div class="chg dn">-4.16% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','ETH')">Long</button>
+        <button class="short" onclick="cmd('short','ETH')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">SOL</span><span class="lev">10x</span></div>
+      <div class="price">$79.20</div>
+      <div class="chg dn">-3.10% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','SOL')">Long</button>
+        <button class="short" onclick="cmd('short','SOL')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">HYPE</span><span class="lev">10x</span></div>
+      <div class="price">$52.09</div>
+      <div class="chg dn">-17.91% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','HYPE')">Long</button>
+        <button class="short" onclick="cmd('short','HYPE')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">XMR</span><span class="tag">monero</span><span class="lev">5x</span></div>
+      <div class="price">$336.39</div>
+      <div class="chg up">+3.98% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','XMR')">Long</button>
+        <button class="short" onclick="cmd('short','XMR')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">PAXG</span><span class="tag">gold</span><span class="lev">10x</span></div>
+      <div class="price">$4,108.80</div>
+      <div class="chg dn">-0.81% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','PAXG')">Long</button>
+        <button class="short" onclick="cmd('short','PAXG')">Short</button>
+      </div>
+    </div></div>
+
+  <h2>MEMECOINS</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="row1"><span class="sym">kPEPE</span><span class="lev">10x</span></div>
+      <div class="price">$0.002670</div>
+      <div class="chg dn">-1.58% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','kPEPE')">Long</button>
+        <button class="short" onclick="cmd('short','kPEPE')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">WIF</span><span class="lev">5x</span></div>
+      <div class="price">$0.165825</div>
+      <div class="chg dn">-2.03% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','WIF')">Long</button>
+        <button class="short" onclick="cmd('short','WIF')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">POPCAT</span><span class="lev">5x</span></div>
+      <div class="price">$0.047061</div>
+      <div class="chg dn">-4.71% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','POPCAT')">Long</button>
+        <button class="short" onclick="cmd('short','POPCAT')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">FARTCOIN</span><span class="lev">10x</span></div>
+      <div class="price">$0.153900</div>
+      <div class="chg dn">-5.94% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','FARTCOIN')">Long</button>
+        <button class="short" onclick="cmd('short','FARTCOIN')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">TRUMP</span><span class="lev">10x</span></div>
+      <div class="price">$1.64</div>
+      <div class="chg dn">-2.59% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','TRUMP')">Long</button>
+        <button class="short" onclick="cmd('short','TRUMP')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">DOGE</span><span class="lev">10x</span></div>
+      <div class="price">$0.074046</div>
+      <div class="chg dn">-3.02% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','DOGE')">Long</button>
+        <button class="short" onclick="cmd('short','DOGE')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">GOAT</span><span class="lev">5x</span></div>
+      <div class="price">$0.014296</div>
+      <div class="chg dn">-0.29% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','GOAT')">Long</button>
+        <button class="short" onclick="cmd('short','GOAT')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">MOODENG</span><span class="lev">3x</span></div>
+      <div class="price">$0.040165</div>
+      <div class="chg dn">-5.00% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','MOODENG')">Long</button>
+        <button class="short" onclick="cmd('short','MOODENG')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">PNUT</span><span class="lev">5x</span></div>
+      <div class="price">$0.043740</div>
+      <div class="chg dn">-0.77% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','PNUT')">Long</button>
+        <button class="short" onclick="cmd('short','PNUT')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">kBONK</span><span class="lev">5x</span></div>
+      <div class="price">$0.004164</div>
+      <div class="chg dn">-6.57% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','kBONK')">Long</button>
+        <button class="short" onclick="cmd('short','kBONK')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">kSHIB</span><span class="lev">10x</span></div>
+      <div class="price">$0.004394</div>
+      <div class="chg dn">-0.59% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','kSHIB')">Long</button>
+        <button class="short" onclick="cmd('short','kSHIB')">Short</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row1"><span class="sym">MELANIA</span><span class="lev">3x</span></div>
+      <div class="price">$0.082980</div>
+      <div class="chg dn">-1.62% 24h</div>
+      <div class="btns">
+        <button class="long" onclick="cmd('long','MELANIA')">Long</button>
+        <button class="short" onclick="cmd('short','MELANIA')">Short</button>
+      </div>
+    </div></div>
+
+  <footer>Hyperliquid testnet · api.hyperliquid-testnet.xyz · prices at build time · not financial advice</footer>
+</div>
+<div id="toast"></div>
+<script>
+  function cmd(side, coin) {
+    var lev = coin === 'BTC' ? 5 : 3;
+    var c = 'python hyperwallet.py ' + side + ' ' + coin + ' 50 --lev ' + lev;
+    try { navigator.clipboard.writeText(c); } catch (e) {}
+    var t = document.getElementById('toast');
+    t.textContent = 'Copied:  ' + c;
+    t.classList.add('show');
+    clearTimeout(window._tt); window._tt = setTimeout(function(){ t.classList.remove('show'); }, 2200);
+  }
+</script>
+</body>
+</html>
