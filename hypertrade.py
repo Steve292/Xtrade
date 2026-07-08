@@ -117,21 +117,28 @@ def main() -> None:
     poll = cfg.get("poll_interval_sec", 30)
     try:
         while True:
-            # Re-read the live balance/positions each pass so funding the wallet
-            # mid-run automatically arms sniping.
-            if args.live:
-                acct = client.account()
-                account_value, open_positions = acct.account_value, acct.positions
-            else:
-                account_value, open_positions = args.balance, []
+            # A transient venue error (502, timeout, rate limit) must not kill a
+            # long-running bot — log it and retry on the next pass.
+            try:
+                # Re-read the live balance/positions each pass so funding the
+                # wallet mid-run automatically arms sniping.
+                if args.live:
+                    acct = client.account()
+                    account_value, open_positions = acct.account_value, acct.positions
+                else:
+                    account_value, open_positions = args.balance, []
 
-            if watch:
-                scan_and_report(trader, watch, args.interval, args.htf, account_value,
-                                dry_run=not args.live)
-            elif args.live and open_positions:
-                print(f"[{args.coin}] position already open — skipping scan")
-            else:
-                trader.run_once(args.coin, args.interval, args.htf, account_value, dry_run=not args.live)
+                if watch:
+                    scan_and_report(trader, watch, args.interval, args.htf, account_value,
+                                    dry_run=not args.live)
+                elif args.live and open_positions:
+                    print(f"[{args.coin}] position already open — skipping scan")
+                else:
+                    trader.run_once(args.coin, args.interval, args.htf, account_value,
+                                    dry_run=not args.live)
+            except Exception as e:
+                print(f"[transient error] {type(e).__name__}: {str(e)[:100]} — retrying next pass")
+
             if not args.loop:
                 break
             time.sleep(poll)
