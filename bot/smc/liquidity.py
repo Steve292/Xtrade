@@ -25,7 +25,7 @@ def detect_liquidity_pools(
     recent = df.tail(lookback)
     highs = recent["high"].values
     lows = recent["low"].values
-    offset = len(df) - lookback
+    offset = len(df) - len(recent)  # 0 when df is shorter than lookback
 
     # Equal highs — buy-side liquidity resting above
     for i in range(len(highs)):

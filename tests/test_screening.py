@@ -34,12 +34,20 @@ def frame(closes):
     })
 
 
-# up-leg 100->90 (trough) ->110 (peak) then pullback into the pocket (~96)
-LTF = frame([100, 97, 94, 92, 90, 94, 98, 102, 106, 110, 106, 101, 97, 96, 96, 96])
+# A full long setup: equal lows at 100 (sell-side liquidity), a sweep dip to 99
+# that takes them out, a rally to 112 (the leg), then a pullback into the
+# 0.618-0.786 pocket (~103).
+LTF = frame([100, 101, 100, 101, 99,
+             101, 103, 105, 107, 109, 111, 112,
+             110, 108, 106, 104, 103, 103, 103, 103])
+# Strictly rising, all-distinct -> no equal highs/lows, so no liquidity pool is
+# ever swept. Used to prove the liquidity-sweep gate fails without a sweep.
+LTF_NO_SWEEP = frame([100, 101, 102, 103, 104, 105, 106, 107, 108, 109,
+                      110, 111, 112, 113, 114, 115, 116, 117, 118, 119])
 BULL_HTF = frame([96, 100, 104, 101, 98, 103, 108, 105, 102, 107, 112])
 BEAR_HTF = frame([120, 116, 112, 115, 118, 113, 108, 111, 114, 109, 104])
 
-CFG = ScreenConfig(swing_lookback=2)
+CFG = ScreenConfig(swing_lookback=2, sweep_bars=20)
 
 
 # ---- Fibonacci ------------------------------------------------------------
@@ -60,7 +68,7 @@ def test_ote_band_and_membership():
 def test_recent_leg_long_picks_low_to_high():
     leg = recent_leg(find_swing_points(LTF, 2), "long")
     assert leg is not None
-    assert abs(leg[0] - 90) < 1.0 and abs(leg[1] - 110) < 1.0
+    assert abs(leg[0] - 99) < 1.0 and abs(leg[1] - 112) < 1.0
 
 
 # ---- screener setup sanity ------------------------------------------------
@@ -99,6 +107,13 @@ def test_htf_opposing_rejected():
     r = TradeScreener(CFG).screen(_long_signal(_pocket_mid()), LTF, BEAR_HTF)
     assert not r.approved
     assert not next(c for c in r.checks if c.name == "Top-down alignment").passed
+
+
+def test_liquidity_sweep_required():
+    # clean signal, but on data with no swept sell-side low -> sweep gate fails
+    r = TradeScreener(CFG).screen(_long_signal(_pocket_mid()), LTF_NO_SWEEP, BULL_HTF)
+    assert not r.approved
+    assert not next(c for c in r.checks if c.name == "Liquidity sweep").passed
 
 
 def test_entry_outside_ote_rejected():

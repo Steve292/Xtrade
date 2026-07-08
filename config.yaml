@@ -51,3 +51,5 @@ screening:
   max_stop_pct: 0.02       # tightest invalidation for a sniper entry (2%)
   ote_low: 0.618           # Fibonacci golden-pocket bounds (OTE zone)
   ote_high: 0.786
+  liquidity_tolerance_pct: 0.0005  # equal-high/low tolerance for liquidity pools
+  sweep_bars: 20           # a liquidity sweep must be this recent to confirm

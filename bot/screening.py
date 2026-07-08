@@ -2,13 +2,14 @@
 Trade screener — the approval gate.
 
 A signal from the SMC strategy is only allowed to trade if it clears EVERY one
-of five checks:
+of six checks:
 
   1. SMC confluence     — the strategy actually found a scored setup
   2. Top-down alignment — the higher timeframe bias does not oppose the trade
-  3. Fibonacci (OTE)     — entry sits in the 0.618-0.786 golden pocket of the leg
-  4. Risk management     — reward:risk clears the minimum and the stop is valid
-  5. Sniper entry        — high confluence AND a tight invalidation AND in the OTE
+  3. Liquidity sweep     — a stop-hunt in the trade direction is confirmed
+  4. Fibonacci (OTE)     — entry sits in the 0.618-0.786 golden pocket of the leg
+  5. Risk management     — reward:risk clears the minimum and the stop is valid
+  6. Sniper entry        — high confluence AND a tight invalidation AND in the OTE
 
 The screener is venue-agnostic: it judges a signal + market context and returns
 an approve/reject with a per-check breakdown, so the same gate protects any
@@ -22,6 +23,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from bot.smc.fibonacci import ote_band, recent_leg
+from bot.smc.liquidity import detect_liquidity_pools, recent_sweep
 from bot.smc.strategy import Signal, SignalType
 from bot.smc.structure import Trend, detect_trend, find_swing_points
 
@@ -58,6 +60,8 @@ class ScreenConfig:
     ote_low: float = 0.618
     ote_high: float = 0.786
     swing_lookback: int = 5
+    liquidity_tolerance_pct: float = 0.0005  # equal-high/low tolerance for pools
+    sweep_bars: int = 20  # a liquidity sweep must be this recent to confirm
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
@@ -93,7 +97,18 @@ class TradeScreener:
             "Top-down alignment", not opposing, f"HTF {htf_trend.value}",
         ))
 
-        # 3. Fibonacci OTE — entry inside the golden pocket of the recent leg
+        # 3. Liquidity sweep — a stop-hunt in the trade direction must be confirmed
+        #    (long needs sell-side liquidity swept; short needs buy-side swept)
+        pools = detect_liquidity_pools(df, cfg.liquidity_tolerance_pct)
+        sweep = recent_sweep(pools, df, bars=cfg.sweep_bars)
+        want_side = "sell_side" if direction == "long" else "buy_side"
+        swept = sweep is not None and sweep.kind == want_side
+        checks.append(Check(
+            "Liquidity sweep", swept,
+            f"{sweep.kind if sweep else 'none'} (need {want_side})",
+        ))
+
+        # 4. Fibonacci OTE — entry inside the golden pocket of the recent leg
         swings = find_swing_points(df, cfg.swing_lookback)
         leg = recent_leg(swings, direction)
         if leg is None:
@@ -107,7 +122,7 @@ class TradeScreener:
                 f"entry {signal.entry:.4g} vs pocket {lo:.4g}-{hi:.4g}",
             ))
 
-        # 4. Risk management — reward:risk and a valid stop
+        # 5. Risk management — reward:risk and a valid stop
         risk = abs(signal.entry - signal.stop_loss)
         reward = abs(signal.take_profit - signal.entry)
         rr = (reward / risk) if risk > 0 else 0.0
@@ -115,7 +130,7 @@ class TradeScreener:
             "Risk/reward", rr >= cfg.min_rr, f"1:{rr:.2f} (min 1:{cfg.min_rr:g})",
         ))
 
-        # 5. Sniper entry — high confluence AND tight invalidation AND in OTE
+        # 6. Sniper entry — high confluence AND tight invalidation AND in OTE
         stop_pct = (risk / signal.entry) if signal.entry else 1.0
         sniper = (
             signal.confidence >= cfg.sniper_confidence
