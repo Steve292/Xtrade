@@ -33,3 +33,12 @@ mt5_timeframe: 15m
 
 # Backtest defaults
 backtest_bars: 2000
+
+# Hyperliquid DeFi wallet + perps (long/short on one venue, testnet by default)
+hyperliquid:
+  testnet: true
+  default_leverage: 3
+  # Majors — PAXG is tokenized gold; XMR is a listed perp (no Monero-chain custody)
+  majors: [BTC, ETH, SOL, HYPE, XMR, PAXG]
+  # Sample memecoins (k-prefixed = 1000x-denominated on Hyperliquid)
+  memecoins: [kPEPE, WIF, POPCAT, FARTCOIN, TRUMP, DOGE, GOAT, MOODENG, PNUT, kBONK, kSHIB, MELANIA]

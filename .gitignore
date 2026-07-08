@@ -3,3 +3,7 @@ venv/
 __pycache__/
 *.pyc
 .DS_Store
+
+# DeFi wallet keystore — NEVER commit private keys
+wallet_testnet.json
+*.wallet

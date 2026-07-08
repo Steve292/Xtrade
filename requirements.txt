@@ -9,6 +9,9 @@ web3>=6.15.0
 # MetaTrader5 package itself runs on the remote Windows/Wine box, not here.
 mt5linux>=0.1.9
 
+# Hyperliquid DeFi wallet + perps (hyperwallet.py). eth-account comes with it.
+hyperliquid-python-sdk>=0.24.0
+
 # macOS menu bar (optional — auto-installed by install-macos.sh)
 # rumps>=0.4.0
 # pyobjc-framework-Cocoa>=10.0
