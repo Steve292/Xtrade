@@ -14,7 +14,9 @@ client.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
+from bot.capital_guard import CapitalGuard, OpenRisk
 from bot.screening import ScreenResult, TradeScreener
 from bot.smc.strategy import Signal, SignalType, SMCStrategy
 
@@ -40,6 +42,7 @@ class HyperliquidTrader:
         risk_pct: float = 1.0,
         leverage: int = 3,
         max_notional_pct: float = 100.0,  # cap position notional at N% of buying power
+        capital_guard: CapitalGuard | None = None,
     ):
         self.client = client
         self.strategy = strategy
@@ -47,6 +50,25 @@ class HyperliquidTrader:
         self.risk_pct = risk_pct
         self.leverage = leverage
         self.max_notional_pct = max_notional_pct
+        self.capital_guard = capital_guard
+
+    def guard_check(self, account_value: float) -> tuple[bool, str | None]:
+        """Daily-loss / drawdown / concurrent-risk gate, checked right before an
+        order is sent. Returns (True, None) if no guard is configured.
+
+        Per-position risk isn't tracked by the venue (Hyperliquid only reports
+        current size/entry, not the risk_pct used when it was opened), so each
+        open position is approximated at the trader's own configured risk_pct
+        — a reasonable stand-in since every trade this bot places is sized
+        with that same value.
+        """
+        if self.capital_guard is None:
+            return True, None
+        self.capital_guard.update(account_value, date.today())
+        open_positions = [
+            OpenRisk(i, self.risk_pct) for i in range(len(self.client.account().positions))
+        ]
+        return self.capital_guard.can_open_new_trade(open_positions, self.risk_pct)
 
     def _plan(self, coin: str, signal: Signal, account_value: float) -> TradePlan | None:
         risk_amount = account_value * (self.risk_pct / 100)
@@ -123,6 +145,10 @@ class HyperliquidTrader:
         if dry_run:
             print("  -> DRY RUN — no order sent (use --live on a funded wallet to fire)\n")
         else:
-            print("  -> SNIPING approved testnet order...")
-            print("  ", self.execute(plan), "\n")
+            allowed, reason = self.guard_check(account_value)
+            if not allowed:
+                print(f"  -> BLOCKED by capital guard: {reason}\n")
+            else:
+                print("  -> SNIPING approved testnet order...")
+                print("  ", self.execute(plan), "\n")
         return result

@@ -22,6 +22,7 @@ import time
 import yaml
 from dotenv import load_dotenv
 
+from bot.capital_guard import CapitalGuard
 from bot.hyperliquid.client import HyperliquidClient
 from bot.hyperliquid.trader import HyperliquidTrader
 from bot.screening import ScreenConfig, TradeScreener
@@ -56,7 +57,11 @@ def scan_and_report(trader, coins, ltf, htf, account_value, dry_run):
         if dry_run:
             print("  -> DRY RUN — no order sent")
         else:
-            print("  -> SNIPING approved testnet order:", trader.execute(plan))
+            allowed, reason = trader.guard_check(account_value)
+            if not allowed:
+                print(f"  -> BLOCKED by capital guard: {reason}")
+            else:
+                print("  -> SNIPING approved testnet order:", trader.execute(plan))
     if not approved:
         print("\nNo setups cleared the full screen this pass.")
 
@@ -97,7 +102,10 @@ def main() -> None:
         reward_risk_ratio=cfg.get("reward_risk_ratio", 2.0),
     )
     screener = TradeScreener(ScreenConfig.from_dict(cfg.get("screening", {})))
-    trader = HyperliquidTrader(client, strategy, screener, risk_pct=args.risk, leverage=args.lev)
+    guard_cfg = cfg.get("capital_guard", {})
+    capital_guard = CapitalGuard(**{k: guard_cfg[k] for k in CapitalGuard.__dataclass_fields__ if k in guard_cfg})
+    trader = HyperliquidTrader(client, strategy, screener, risk_pct=args.risk, leverage=args.lev,
+                                capital_guard=capital_guard)
 
     watch = None
     if args.watchlist:
