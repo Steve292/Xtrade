@@ -19,6 +19,23 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+# Friendly names -> the canonical Hyperliquid coin. Gold trades as PAXG
+# (tokenized gold); let callers say GOLD / XAU / XAU/USD and mean PAXG.
+# Explicit table only — no generic suffix-stripping, which could mis-map real
+# tickers.
+COIN_ALIASES = {
+    "GOLD": "PAXG",
+    "XAU": "PAXG",
+    "XAUUSD": "PAXG",
+    "XAU/USD": "PAXG",
+}
+
+
+def resolve_coin(name: str) -> str:
+    """Map a friendly alias to its canonical coin (case-insensitive); pass
+    anything else through unchanged. Idempotent — PAXG resolves to PAXG."""
+    return COIN_ALIASES.get(name.strip().upper(), name)
+
 
 @dataclass
 class Market:
@@ -85,10 +102,11 @@ class HyperliquidClient:
         return self._universe
 
     def mid(self, coin: str) -> float:
-        return float(self.info.all_mids()[coin])
+        return float(self.info.all_mids()[resolve_coin(coin)])
 
     def candles(self, coin: str, interval: str = "15m", lookback_hours: int = 48) -> pd.DataFrame:
         """OHLCV candles for a coin, shaped like the SMC strategy expects."""
+        coin = resolve_coin(coin)
         now = int(time.time() * 1000)
         start = now - lookback_hours * 3600 * 1000
         raw = self.info.candles_snapshot(coin, interval, start, now)
@@ -103,7 +121,7 @@ class HyperliquidClient:
     def markets(self, names: list[str] | None = None) -> list[Market]:
         universe = self._universe_map()
         mids = self.info.all_mids()
-        wanted = names if names is not None else list(universe.keys())
+        wanted = [resolve_coin(n) for n in names] if names is not None else list(universe.keys())
         out: list[Market] = []
         for name in wanted:
             spec = universe.get(name)
@@ -152,6 +170,7 @@ class HyperliquidClient:
     # --- execution -------------------------------------------------------
 
     def _size_from_usd(self, coin: str, usd: float) -> float:
+        coin = resolve_coin(coin)
         spec = self._universe_map().get(coin)
         if spec is None:
             raise ValueError(f"{coin} is not a listed perp on this venue")
@@ -174,6 +193,7 @@ class HyperliquidClient:
 
     def _open(self, coin: str, is_buy: bool, usd: float, leverage: int | None):
         self._require_exchange()
+        coin = resolve_coin(coin)
         if leverage is not None:
             self.exchange.update_leverage(int(leverage), coin, is_cross=True)
         sz = self._size_from_usd(coin, usd)
@@ -181,4 +201,4 @@ class HyperliquidClient:
 
     def close(self, coin: str):
         self._require_exchange()
-        return self.exchange.market_close(coin)
+        return self.exchange.market_close(resolve_coin(coin))
