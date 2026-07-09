@@ -7,3 +7,6 @@ __pycache__/
 # DeFi wallet keystore — NEVER commit private keys
 wallet_testnet.json
 *.wallet
+
+# Service logs
+logs/
