@@ -4,7 +4,7 @@ Hyperliquid auto-trader.
 Pulls candles for a coin, runs the SMC strategy top-down (LTF + HTF), then puts
 the signal through the full TradeScreener (SMC + Fibonacci + top-down + risk +
 sniper). ONLY an approved signal is sized and — in live mode — sent to the venue
-as a real testnet long/short.
+(testnet or mainnet, per config) as a real long/short.
 
 Safety: dry-run by default. It screens and prints the full breakdown but sends
 no order unless `dry_run=False`, which also requires a funded (key-bearing)
@@ -102,7 +102,8 @@ class HyperliquidTrader:
         return signal, result, plan
 
     def execute(self, plan: TradePlan):
-        """Send the approved trade to the venue (real testnet order)."""
+        """Send the approved trade to the venue (real order, whichever venue
+        the client is connected to — testnet or mainnet)."""
         if plan.side == "long":
             return self.client.long(plan.coin, plan.usd, leverage=plan.leverage)
         return self.client.short(plan.coin, plan.usd, leverage=plan.leverage)
@@ -149,6 +150,6 @@ class HyperliquidTrader:
             if not allowed:
                 print(f"  -> BLOCKED by capital guard: {reason}\n")
             else:
-                print("  -> SNIPING approved testnet order...")
+                print("  -> SNIPING approved order...")
                 print("  ", self.execute(plan), "\n")
         return result

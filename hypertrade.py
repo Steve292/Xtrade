@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-SMC auto-trader for Hyperliquid (testnet). Every candidate signal must clear the
-full screen — SMC + Fibonacci + top-down + risk + sniper entry — before it can
-trade.
+SMC auto-trader for Hyperliquid. Venue (testnet or mainnet) is whatever
+`hyperliquid.testnet` in config.yaml says — check the startup banner, it
+states the live venue explicitly. Every candidate signal must clear the full
+screen — SMC + Fibonacci + top-down + risk + sniper entry — before it can trade.
 
     python hypertrade.py BTC                  # dry-run: screen only, no orders
     python hypertrade.py XMR --risk 1 --lev 5 # dry-run with explicit risk/leverage
     python hypertrade.py BTC --loop           # keep scanning on the poll interval
-    python hypertrade.py BTC --live           # place REAL testnet orders on approval
+    python hypertrade.py BTC --live           # place REAL orders on approval, on
+                                              #   whichever venue config.yaml selects
                                               #   (needs a funded wallet)
 
 Dry-run is the default and sends no orders. `--live` requires a wallet (from
-HL_PRIVATE_KEY or wallet_testnet.json) funded via the testnet faucet.
+HL_PRIVATE_KEY or wallet_testnet.json) funded on the configured venue.
 """
 
 from __future__ import annotations
@@ -61,7 +63,7 @@ def scan_and_report(trader, coins, ltf, htf, account_value, dry_run):
             if not allowed:
                 print(f"  -> BLOCKED by capital guard: {reason}")
             else:
-                print("  -> SNIPING approved testnet order:", trader.execute(plan))
+                print("  -> SNIPING approved order:", trader.execute(plan))
     if not approved:
         print("\nNo setups cleared the full screen this pass.")
 
@@ -72,10 +74,11 @@ def main() -> None:
         cfg = yaml.safe_load(f) or {}
     hl = cfg.get("hyperliquid", {})
 
-    ap = argparse.ArgumentParser(description="SMC-screened Hyperliquid auto-trader (testnet)")
+    ap = argparse.ArgumentParser(description="SMC-screened Hyperliquid auto-trader")
     ap.add_argument("coin", nargs="?", default="BTC")
     ap.add_argument("--watchlist", action="store_true", help="scan all configured majors + memecoins")
-    ap.add_argument("--live", action="store_true", help="place real testnet orders (needs funded wallet)")
+    ap.add_argument("--live", action="store_true",
+                    help="place real orders on the venue set by hyperliquid.testnet in config.yaml (needs funded wallet)")
     ap.add_argument("--loop", action="store_true", help="scan continuously")
     ap.add_argument("--risk", type=float, default=cfg.get("risk_per_trade_pct", 1.0))
     ap.add_argument("--lev", type=int, default=hl.get("default_leverage", 3))
