@@ -111,7 +111,8 @@ def main() -> None:
     if args.watchlist:
         watch = list(dict.fromkeys((hl.get("majors") or []) + (hl.get("memecoins") or [])))
 
-    mode = "LIVE (testnet orders)" if args.live else "DRY RUN (no orders)"
+    venue_label = "testnet" if hl.get("testnet", True) else "REAL MONEY — mainnet"
+    mode = f"LIVE ({venue_label} orders)" if args.live else "DRY RUN (no orders)"
     target = f"watchlist ({len(watch)} coins)" if watch else args.coin
     start_balance = client.account().account_value if args.live else args.balance
     print("=" * 60)
