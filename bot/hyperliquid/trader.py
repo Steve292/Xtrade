@@ -70,17 +70,23 @@ class HyperliquidTrader:
         ]
         return self.capital_guard.can_open_new_trade(open_positions, self.risk_pct)
 
-    def _plan(self, coin: str, signal: Signal, account_value: float) -> TradePlan | None:
+    def _plan(
+        self, coin: str, signal: Signal, account_value: float, withdrawable: float | None = None
+    ) -> TradePlan | None:
         risk_amount = account_value * (self.risk_pct / 100)
         stop_frac = abs(signal.entry - signal.stop_loss) / signal.entry
         if stop_frac <= 0:
             return None
         notional = risk_amount / stop_frac
-        # Never exceed buying power (account_value * leverage); honour the $10 floor.
-        buying_power = account_value * self.leverage * (self.max_notional_pct / 100)
+        # Cap by FREE margin (withdrawable), not total account value — an existing
+        # open position already ties up margin that isn't actually available for a
+        # new order. In dry-run there's no live withdrawable figure, so fall back
+        # to account_value (matches prior behavior). Also honour the $10 floor.
+        free = withdrawable if withdrawable is not None else account_value
+        buying_power = free * self.leverage * (self.max_notional_pct / 100)
         notional = min(notional, buying_power)
         if notional < 10:
-            return None  # can't place a compliant order within the risk budget
+            return None  # can't place a compliant order within the risk budget / free margin
         return TradePlan(
             coin=coin,
             side=signal.type.value,
@@ -92,13 +98,15 @@ class HyperliquidTrader:
             risk_pct=self.risk_pct,
         )
 
-    def evaluate(self, coin: str, ltf: str, htf: str, account_value: float):
+    def evaluate(
+        self, coin: str, ltf: str, htf: str, account_value: float, withdrawable: float | None = None
+    ):
         """Return (signal, ScreenResult, TradePlan|None) without trading."""
         df = self.client.candles(coin, ltf, lookback_hours=72)
         htf_df = self.client.candles(coin, htf, lookback_hours=240)
         signal = self.strategy.analyze(df, htf_df)
         result = self.screener.screen(signal, df, htf_df)
-        plan = self._plan(coin, signal, account_value) if result.approved else None
+        plan = self._plan(coin, signal, account_value, withdrawable) if result.approved else None
         return signal, result, plan
 
     def execute(self, plan: TradePlan):
@@ -108,20 +116,25 @@ class HyperliquidTrader:
             return self.client.long(plan.coin, plan.usd, leverage=plan.leverage)
         return self.client.short(plan.coin, plan.usd, leverage=plan.leverage)
 
-    def scan(self, coins: list[str], ltf: str, htf: str, account_value: float):
+    def scan(
+        self, coins: list[str], ltf: str, htf: str, account_value: float, withdrawable: float | None = None
+    ):
         """Evaluate a list of coins. Returns (coin, signal, result, plan, error) rows;
         one coin failing (e.g. no candles) never aborts the rest of the scan."""
         rows = []
         for coin in coins:
             try:
-                signal, result, plan = self.evaluate(coin, ltf, htf, account_value)
+                signal, result, plan = self.evaluate(coin, ltf, htf, account_value, withdrawable)
                 rows.append((coin, signal, result, plan, None))
             except Exception as e:  # keep scanning the rest of the watchlist
                 rows.append((coin, None, None, None, str(e)))
         return rows
 
-    def run_once(self, coin: str, ltf: str, htf: str, account_value: float, dry_run: bool = True):
-        signal, result, plan = self.evaluate(coin, ltf, htf, account_value)
+    def run_once(
+        self, coin: str, ltf: str, htf: str, account_value: float, dry_run: bool = True,
+        withdrawable: float | None = None,
+    ):
+        signal, result, plan = self.evaluate(coin, ltf, htf, account_value, withdrawable)
 
         if signal.type == SignalType.NONE:
             print(f"[{coin}] no SMC setup — {signal.reason}")
@@ -138,7 +151,8 @@ class HyperliquidTrader:
             return result
 
         if plan is None:
-            print("  -> approved, but not sizable — fund the wallet (or amount < $10 min). No order.\n")
+            print("  -> approved, but not sizable — no free margin (locked in an existing "
+                  "position) or amount < $10 min. No order.\n")
             return result
 
         print(f"  Plan: {plan.side.upper()} ${plan.usd} of {coin} at {plan.leverage}x "

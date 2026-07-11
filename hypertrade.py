@@ -32,8 +32,8 @@ from bot.smc.strategy import SMCStrategy, SignalType
 from bot.wallet import DefiWallet
 
 
-def scan_and_report(trader, coins, ltf, htf, account_value, dry_run):
-    rows = trader.scan(coins, ltf, htf, account_value)
+def scan_and_report(trader, coins, ltf, htf, account_value, dry_run, withdrawable=None):
+    rows = trader.scan(coins, ltf, htf, account_value, withdrawable)
     print(f"{'COIN':<11}{'SIGNAL':<7}{'CONF':>5}  VERDICT")
     print("-" * 52)
     approved = []
@@ -53,7 +53,8 @@ def scan_and_report(trader, coins, ltf, htf, account_value, dry_run):
         print(f"\n{coin} APPROVED — full screen:")
         print(result.table())
         if plan is None:
-            print("  -> approved, but not sizable — fund the wallet (or amount < $10 min). No order.")
+            print("  -> approved, but not sizable — no free margin (locked in an existing "
+                  "position) or amount < $10 min. No order.")
             continue
         print(f"  Plan: {plan.side.upper()} ${plan.usd} of {coin} at {plan.leverage}x")
         if dry_run:
@@ -136,18 +137,20 @@ def main() -> None:
                 # wallet mid-run automatically arms sniping.
                 if args.live:
                     acct = client.account()
-                    account_value, open_positions = acct.account_value, acct.positions
+                    account_value, withdrawable, open_positions = (
+                        acct.account_value, acct.withdrawable, acct.positions
+                    )
                 else:
-                    account_value, open_positions = args.balance, []
+                    account_value, withdrawable, open_positions = args.balance, args.balance, []
 
                 if watch:
                     scan_and_report(trader, watch, args.interval, args.htf, account_value,
-                                    dry_run=not args.live)
+                                    dry_run=not args.live, withdrawable=withdrawable)
                 elif args.live and open_positions:
                     print(f"[{args.coin}] position already open — skipping scan")
                 else:
                     trader.run_once(args.coin, args.interval, args.htf, account_value,
-                                    dry_run=not args.live)
+                                    dry_run=not args.live, withdrawable=withdrawable)
             except Exception as e:
                 print(f"[transient error] {type(e).__name__}: {str(e)[:100]} — retrying next pass")
 
