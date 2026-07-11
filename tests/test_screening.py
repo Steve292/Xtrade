@@ -153,6 +153,24 @@ def test_plan_skips_when_below_min_order():
     assert t._plan("BTC", sig, account_value=100) is None
 
 
+def test_plan_capped_by_free_margin_not_total_equity():
+    # Real scenario hit live: account_value=$5.39 but withdrawable=$0 because an
+    # existing position has all margin locked. Must skip (return None), not size
+    # against total equity and get exchange-rejected for insufficient margin.
+    t = HyperliquidTrader(client=None, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    sig = _long_signal(1822.1, sl_pct=0.0013)  # mirrors the live ETH sniper entry
+    assert t._plan("ETH", sig, account_value=5.39, withdrawable=0.0) is None
+
+
+def test_plan_uses_free_margin_when_partially_available():
+    t = HyperliquidTrader(client=None, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    sig = _long_signal(100.0, sl_pct=0.01)  # 1% stop
+    # Plenty of equity, but only $10 free -> buying power capped at $10*3=$30,
+    # well below the risk-driven $1000 notional this would otherwise want.
+    plan = t._plan("BTC", sig, account_value=100000, withdrawable=10.0)
+    assert plan is not None and abs(plan.usd - 30.0) < 1e-6
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

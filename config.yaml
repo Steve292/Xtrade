@@ -34,12 +34,12 @@ mt5_timeframe: 15m
 # Backtest defaults
 backtest_bars: 2000
 
-# Hyperliquid DeFi wallet + perps (long/short on one venue, testnet by default)
+# Hyperliquid DeFi wallet + perps (long/short on one venue)
 hyperliquid:
-  testnet: true
+  testnet: false
   default_leverage: 3
   # Majors — PAXG is tokenized gold; XMR is a listed perp (no Monero-chain custody)
-  majors: [BTC, ETH, SOL, HYPE, XMR, PAXG]
+  majors: [BTC, ETH, SOL, HYPE, WLD, XMR, PAXG]
   # Sample memecoins (k-prefixed = 1000x-denominated on Hyperliquid)
   memecoins: [kPEPE, WIF, POPCAT, FARTCOIN, TRUMP, DOGE, GOAT, MOODENG, PNUT, kBONK, kSHIB, MELANIA]
 
@@ -53,3 +53,12 @@ screening:
   ote_high: 0.786
   liquidity_tolerance_pct: 0.0005  # equal-high/low tolerance for liquidity pools
   sweep_bars: 20           # a liquidity sweep must be this recent to confirm
+
+# Capital guard — daily-loss / drawdown circuit breaker + concurrent-risk caps.
+# Checked right before a --live order is sent; once halted it blocks new
+# entries until a new trading day starts or the balance recovers off its peak.
+capital_guard:
+  max_daily_loss_pct: 3.0
+  max_drawdown_pct: 10.0
+  max_concurrent_trades: 3
+  max_concurrent_open_risk_pct: 3.0

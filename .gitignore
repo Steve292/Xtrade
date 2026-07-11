@@ -7,3 +7,15 @@ __pycache__/
 # DeFi wallet keystore — NEVER commit private keys
 wallet_testnet.json
 *.wallet
+*.bak
+
+# Env file backups/variants — NEVER commit credentials
+.env.save
+.env.local
+.env.bak
+
+# Service logs
+logs/
+
+# Personal Claude Code permissions (local-only, not shared project config)
+.claude/settings.local.json

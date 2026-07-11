@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bot.hyperliquid.client import HyperliquidClient
+from bot.hyperliquid.client import HyperliquidClient, resolve_coin
 from bot.wallet import DefiWallet
 
 
@@ -26,10 +26,11 @@ class StubInfo:
             {"name": "BTC", "szDecimals": 5, "maxLeverage": 40, "marginTableId": 1},
             {"name": "ETH", "szDecimals": 4, "maxLeverage": 25, "marginTableId": 2},
             {"name": "XMR", "szDecimals": 2, "maxLeverage": 10, "marginTableId": 3},
+            {"name": "PAXG", "szDecimals": 4, "maxLeverage": 10, "marginTableId": 4},
         ]}
 
     def all_mids(self, dex=""):
-        return {"BTC": "50000.0", "ETH": "2000.0", "XMR": "300.0"}
+        return {"BTC": "50000.0", "ETH": "2000.0", "XMR": "300.0", "PAXG": "4000.0"}
 
     def user_state(self, address, dex=""):
         return {
@@ -119,6 +120,22 @@ def test_close_routes_to_market_close():
     c, ex = _client()
     c.close("SOL")
     assert ex.calls[-1] == ("market_close", "SOL")
+
+
+def test_resolve_coin_gold_aliases():
+    for alias in ("GOLD", "gold", "XAU", "xau", "XAUUSD", "XAU/USD"):
+        assert resolve_coin(alias) == "PAXG", alias
+    assert resolve_coin("BTC") == "BTC"       # passthrough
+    assert resolve_coin("PAXG") == "PAXG"     # idempotent
+
+
+def test_gold_alias_routes_to_paxg():
+    c, ex = _client()
+    c.long("GOLD", usd=400)  # 400 / 4000 = 0.1 of PAXG
+    call = ex.calls[-1]
+    assert call[0] == "market_open" and call[1] == "PAXG" and call[3] == 0.1
+    c.close("XAU/USD")
+    assert ex.calls[-1] == ("market_close", "PAXG")
 
 
 def test_readonly_client_cannot_trade():
