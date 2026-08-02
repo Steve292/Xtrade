@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import yaml
 from dotenv import load_dotenv
@@ -38,10 +41,16 @@ def main() -> None:
         login=os.getenv("MT5_LOGIN", ""),
         password=os.getenv("MT5_PASSWORD", ""),
         server=os.getenv("MT5_SERVER", ""),
+        terminal_path=os.getenv("MT5_TERMINAL_PATH", ""),
     )
     print("  connected.\n")
 
-    print(f"Account balance: {client.account_balance():,.2f}\n")
+    raw_balance = client.account_balance()
+    if config.get("mt5_cent_account"):
+        print(f"Account balance: {raw_balance:,.2f} account units "
+              f"(${raw_balance / 100:,.2f} — cent account)\n")
+    else:
+        print(f"Account balance: ${raw_balance:,.2f}\n")
 
     info = client.symbol_info(symbol)
     print(f"Symbol specs — {info.name}")

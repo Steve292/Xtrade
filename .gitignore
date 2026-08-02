@@ -17,5 +17,19 @@ wallet_testnet.json
 # Service logs
 logs/
 
+# Capital guard runtime state (local only, not shared config)
+capital_guard_state.json
+combined_guard_state.json
+live_state.json
+dominance_history.json
+
 # Personal Claude Code permissions (local-only, not shared project config)
 .claude/settings.local.json
+
+# Local Codex CLI session state (machine-specific, not shared project config)
+.codex/
+
+# Stray machine-local files that ended up in the repo root, not project data
+bugreport-sdk_gphone64_arm64-*.zip
+msedgewebview2.dxvk-cache
+settings.dat

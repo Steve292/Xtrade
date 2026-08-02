@@ -2,14 +2,19 @@
 Trade screener — the approval gate.
 
 A signal from the SMC strategy is only allowed to trade if it clears EVERY one
-of six checks:
+of seven checks:
 
   1. SMC confluence     — the strategy actually found a scored setup
   2. Top-down alignment — the higher timeframe bias does not oppose the trade
   3. Liquidity sweep     — a stop-hunt in the trade direction is confirmed
   4. Risk management     — reward:risk clears the minimum and the stop is valid
-  5. Sniper entry        — high confluence AND a tight invalidation
-  6. Fibonacci (OTE)     — FINAL gate: entry sits in the 0.618-0.786 golden pocket
+  5. Sniper entry        — high confluence AND the stop within max_stop_pct
+                            (raised to accommodate a fixed 20% stop-loss —
+                            see bot/smc/strategy.py's stop_loss_pct — no
+                            longer "tight" by design, at explicit user
+                            request)
+  6. Supply/Demand       — entry sits at a demand (long) or supply (short) zone
+  7. Fibonacci (OTE)     — FINAL gate: entry sits in the 0.618-0.786 golden pocket
 
 Fibonacci runs last by design: a trade is only approved once everything else
 holds AND price is at the optimal entry in the pocket.
@@ -29,6 +34,7 @@ from bot.smc.fibonacci import ote_band, recent_leg
 from bot.smc.liquidity import detect_liquidity_pools, recent_sweep
 from bot.smc.strategy import Signal, SignalType
 from bot.smc.structure import Trend, detect_trend, find_swing_points
+from bot.smc.supply_demand import detect_supply_demand_zones, nearest_zone
 
 
 @dataclass
@@ -59,7 +65,7 @@ class ScreenConfig:
     min_confidence: float = 0.55
     min_rr: float = 2.0
     sniper_confidence: float = 0.65
-    max_stop_pct: float = 0.02  # tight invalidation for a sniper entry (2%)
+    max_stop_pct: float = 0.25  # raised from 2% to fit the fixed 20% stop-loss + headroom
     ote_low: float = 0.618
     ote_high: float = 0.786
     swing_lookback: int = 5
@@ -130,10 +136,25 @@ class TradeScreener:
             f"conf {signal.confidence:.0%}, stop {stop_pct:.2%} (max {cfg.max_stop_pct:.0%})",
         ))
 
-        # 6. Fibonacci OTE — the FINAL gate: entry must be in the golden pocket
+        swings = find_swing_points(df, cfg.swing_lookback)
+
+        # 6. Supply & Demand — the entry must sit at a genuine institutional
+        #    zone: a demand zone (long) or supply zone (short) that a prior
+        #    impulse originated from. Structural confirmation that price is at
+        #    a level smart money is likely defending, not mid-air.
+        sd_zones = detect_supply_demand_zones(df, swings)
+        want_zone = "demand" if direction == "long" else "supply"
+        at_zone = nearest_zone(signal.entry, sd_zones, want_zone) is not None
+        n_zones = sum(1 for z in sd_zones if z.kind == want_zone)
+        checks.append(Check(
+            "Supply/Demand", at_zone,
+            f"{'in ' + want_zone + ' zone' if at_zone else 'not at a ' + want_zone + ' zone'} "
+            f"({n_zones} {want_zone} zone{'s' if n_zones != 1 else ''} active)",
+        ))
+
+        # 7. Fibonacci OTE — the FINAL gate: entry must be in the golden pocket
         #    of the recent leg. Runs last so a trade is only approved once every
         #    other condition holds AND price is at the optimal entry.
-        swings = find_swing_points(df, cfg.swing_lookback)
         leg = recent_leg(swings, direction)
         if leg is None:
             checks.append(Check("Fibonacci OTE (final)", False, "no clean leg"))

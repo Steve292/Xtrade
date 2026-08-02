@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SMC Trading Bot — entry point."""
+"""TraderX — entry point."""
 
 from bot.runner import run_bot
 

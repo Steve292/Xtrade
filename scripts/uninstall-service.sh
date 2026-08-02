@@ -1,5 +1,5 @@
 #!/bin/bash
-# Stop and remove the SMC auto-trader 24/7 launchd service.
+# Stop and remove the TraderX auto-trader 24/7 launchd service.
 LABEL="com.smc.autotrader"
 UID_NUM="$(id -u)"
 

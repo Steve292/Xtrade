@@ -9,13 +9,16 @@ a REJECT. Also checks the trader's risk-based sizing.
 from __future__ import annotations
 
 import sys
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bot.hyperliquid.trader import HyperliquidTrader
+from bot.capital_guard import CapitalGuard
+from bot.hyperliquid.client import Position
+from bot.hyperliquid.trader import HyperliquidTrader, TradePlan
 from bot.screening import ScreenConfig, TradeScreener
 from bot.smc.fibonacci import in_ote, ote_band, recent_leg, retracement_levels
 from bot.smc.strategy import Signal, SignalType
@@ -32,6 +35,37 @@ def frame(closes):
         "close": closes,
         "volume": [1] * len(closes),
     })
+
+
+def frame_ohlc(rows):
+    """Explicit [open, high, low, close] candles — needed when a test relies on
+    candle bodies (e.g. a large demand candle forming a supply/demand zone),
+    which the close-only `frame()` helper can't express (it has zero-body bars)."""
+    ts = pd.date_range("2025-01-01", periods=len(rows), freq="15min")
+    o, h, l, c = zip(*rows)
+    return pd.DataFrame({
+        "timestamp": ts, "open": list(o), "high": list(h),
+        "low": list(l), "close": list(c), "volume": [1] * len(rows),
+    })
+
+
+# A genuinely clean 7-gate long: equal lows at 100 (sell-side liquidity), a big
+# bullish demand candle at index 4 that sweeps to 98 and closes at 104 (forming
+# a demand zone [98, 104]), a rally to 112 (the leg), then a pullback to ~102 —
+# which sits inside BOTH the demand zone and the 0.618-0.786 OTE pocket.
+LTF_SD = frame_ohlc([
+    [100.5, 101, 100, 100.5], [100.5, 101, 100, 100.5],
+    [100.5, 101, 100, 100.5], [100.5, 101, 100, 100.5],
+    [100, 104.5, 98, 104],                                   # 4: demand candle + sweep
+    [104, 106.5, 103.5, 106], [106, 108.5, 105.5, 108],
+    [108, 110.5, 107.5, 110], [110, 112.5, 109.5, 112],      # rally (impulse) to 112
+    [112, 112, 110, 110.5], [110.5, 111, 108, 108.5],
+    [108.5, 109, 106, 106.5], [106.5, 107, 104, 104.5],
+    [104.5, 105, 102, 102.5],                                # pullback into the pocket
+    [102.5, 103, 101.5, 102], [102, 102.5, 101.5, 102],
+    [102, 102.5, 101.5, 102], [102, 102.5, 101.5, 102],
+    [102, 102.5, 101.5, 102], [102, 102.5, 101.5, 102],
+])
 
 
 # A full long setup: equal lows at 100 (sell-side liquidity), a sweep dip to 99
@@ -90,10 +124,18 @@ def _pocket_mid():
     return (lo + hi) / 2
 
 
+def _pocket_mid_of(f):
+    leg = recent_leg(find_swing_points(f, 2), "long")
+    lo, hi = ote_band(*leg)
+    return (lo + hi) / 2
+
+
 # ---- screener: approve + each failure mode --------------------------------
 
 def test_clean_setup_approved():
-    r = TradeScreener(CFG).screen(_long_signal(_pocket_mid()), LTF, BULL_HTF)
+    # Uses LTF_SD, where the entry sits in both a demand zone and the OTE pocket,
+    # so all seven gates (including Supply/Demand) can pass.
+    r = TradeScreener(CFG).screen(_long_signal(_pocket_mid_of(LTF_SD)), LTF_SD, BULL_HTF)
     assert r.approved, r.table()
 
 
@@ -129,8 +171,9 @@ def test_low_rr_rejected():
 
 
 def test_wide_stop_fails_sniper_only():
-    # 3% stop (> 2% max) but RR still 2.5 and in the pocket -> only sniper fails
-    r = TradeScreener(CFG).screen(_long_signal(_pocket_mid(), sl_pct=0.03), LTF, BULL_HTF)
+    # 30% stop (> 25% max) but RR still 2.5, in the pocket, and at a demand
+    # zone (LTF_SD) -> only sniper fails.
+    r = TradeScreener(CFG).screen(_long_signal(_pocket_mid_of(LTF_SD), sl_pct=0.30), LTF_SD, BULL_HTF)
     assert not r.approved
     failed = [c.name for c in r.checks if not c.passed]
     assert failed == ["Sniper entry"], failed
@@ -169,6 +212,384 @@ def test_plan_uses_free_margin_when_partially_available():
     # well below the risk-driven $1000 notional this would otherwise want.
     plan = t._plan("BTC", sig, account_value=100000, withdrawable=10.0)
     assert plan is not None and abs(plan.usd - 30.0) < 1e-6
+
+
+# ---- trader execute() / check_exits() -------------------------------------
+
+class StubHLClient:
+    """Stub venue for HyperliquidTrader.execute()/check_exits() — no network."""
+
+    def __init__(self, fill_size=None, fill_price=None, reject=False, bracket_error=False):
+        self.calls = []
+        self.fill_size = fill_size
+        self.fill_price = fill_price
+        self.reject = reject
+        self.bracket_error = bracket_error
+        self.resting = {}  # coin -> count of resting trigger orders, for enforce_brackets()
+
+    def long(self, coin, usd, leverage=None):
+        self.calls.append(("long", coin, usd, leverage))
+        return self._order_resp()
+
+    def short(self, coin, usd, leverage=None):
+        self.calls.append(("short", coin, usd, leverage))
+        return self._order_resp()
+
+    def _order_resp(self):
+        if self.reject:
+            return {"status": "ok", "response": {"type": "order", "data": {
+                "statuses": [{"error": "Insufficient margin to place order. asset=1"}]}}}
+        return {"status": "ok", "response": {"type": "order", "data": {
+            "statuses": [{"filled": {"totalSz": str(self.fill_size), "avgPx": str(self.fill_price), "oid": 1}}]}}}
+
+    def attach_bracket(self, coin, is_buy, size, stop_loss, take_profit):
+        self.calls.append(("attach_bracket", coin, is_buy, size, stop_loss, take_profit))
+        if self.bracket_error:
+            return {"status": "ok", "response": {"type": "order", "data": {
+                "statuses": [{"error": "bad trigger"}, {"error": "bad trigger"}]}}}
+        return {"status": "ok", "response": {"type": "order", "data": {
+            "statuses": [{"resting": {"oid": 2}}, {"resting": {"oid": 3}}]}}}
+
+    def open_trigger_orders(self, coin):
+        self.calls.append(("open_trigger_orders", coin))
+        val = self.resting.get(coin, 0)
+        return val if isinstance(val, list) else [{}] * val  # int -> N placeholder legs
+
+    def modify_trigger_order(self, coin, oid, is_buy, size, trigger_px, tpsl):
+        self.calls.append(("modify_trigger_order", coin, oid, is_buy, size, trigger_px, tpsl))
+        if self.bracket_error:
+            return {"status": "ok", "response": {"type": "order", "data": {
+                "statuses": [{"error": "bad modify"}]}}}
+        return {"status": "ok", "response": {"type": "order", "data": {
+            "statuses": [{"resting": {"oid": oid}}]}}}
+
+
+def _eth_plan():
+    return TradePlan(coin="ETH", side="long", usd=16.35, leverage=3, entry=1822.1,
+                      stop_loss=1819.73, take_profit=1826.84, risk_pct=1.0)
+
+
+def test_execute_attaches_bracket_on_fill():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+    assert [c[0] for c in client.calls] == ["long", "attach_bracket"]
+    _, coin, is_buy, size, sl, tp = client.calls[1]
+    assert coin == "ETH" and is_buy is True and size == 0.0089
+    assert sl == 1819.73 and tp == 1826.84
+    assert t._tracked["ETH"]["entry"] == 1822.1
+
+
+def test_execute_skips_bracket_on_rejected_order():
+    client = StubHLClient(reject=True)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+    assert [c[0] for c in client.calls] == ["long"]  # no attach_bracket attempted
+    assert "ETH" not in t._tracked
+
+
+def test_execute_does_not_track_on_bracket_rejection():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1, bracket_error=True)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+    assert "ETH" not in t._tracked  # bracket rejected -> don't claim it's protected
+
+
+def test_check_exits_reports_and_drops_closed_positions():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+    assert "ETH" in t._tracked
+
+    closed = t.check_exits(open_positions=[])  # ETH no longer open
+    assert len(closed) == 1 and closed[0]["coin"] == "ETH"
+    assert "ETH" not in t._tracked
+
+
+def test_check_exits_leaves_still_open_positions_alone():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+
+    still_open = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1,
+                            unrealized_pnl=0.0, leverage=3.0)]
+    closed = t.check_exits(open_positions=still_open)
+    assert closed == []
+    assert "ETH" in t._tracked
+
+
+def test_enforce_brackets_skips_already_protected_position():
+    client = StubHLClient()
+    client.resting = {"ETH": 2}  # both legs already resting
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    pos = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1, unrealized_pnl=0.0, leverage=3.0)]
+    enforced = t.enforce_brackets(pos, account_value=1000.0)
+    assert enforced == []
+    assert not any(c[0] == "attach_bracket" for c in client.calls)
+
+
+def test_enforce_brackets_uses_tracked_plan_when_available():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())  # populates _tracked["ETH"] with the plan's real SL/TP
+
+    client.resting = {}  # bracket never actually made it to the venue
+    pos = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1, unrealized_pnl=0.0, leverage=3.0)]
+    enforced = t.enforce_brackets(pos, account_value=1000.0)
+    assert len(enforced) == 1 and enforced[0]["coin"] == "ETH"
+    _, coin, is_buy, size, sl, tp = client.calls[-1]
+    assert coin == "ETH" and sl == 1819.73 and tp == 1826.84  # the plan's own values, not recomputed
+
+
+def test_enforce_brackets_falls_back_to_risk_based_stop_when_untracked():
+    client = StubHLClient()
+    screener = TradeScreener(ScreenConfig(min_rr=2.0))
+    t = HyperliquidTrader(client=client, strategy=None, screener=screener, risk_pct=1.0, leverage=3)
+    # ETH was never opened by this trader instance (e.g. bot restarted) -> untracked
+    pos = [Position(coin="ETH", side="long", size=10.0, entry=100.0, unrealized_pnl=0.0, leverage=3.0)]
+    enforced = t.enforce_brackets(pos, account_value=1000.0)
+    assert len(enforced) == 1
+    # dollar risk bounded to 1% of $1000 = $10, spread over size 10 -> $1/unit
+    assert abs(enforced[0]["stop_loss"] - 99.0) < 1e-9
+    assert abs(enforced[0]["take_profit"] - 102.0) < 1e-9  # 2R reward
+    assert "ETH" in t._tracked  # now tracked going forward
+
+
+def test_enforce_brackets_fallback_bounds_dollar_risk_regardless_of_size():
+    # Regression for a real bug: POPCAT lost tracking after a restart and got
+    # re-protected with a flat max_stop_pct (2%) applied to its already-large
+    # size (sized against a much tighter ~0.2-0.5% original sniper stop) —
+    # the eventual stop-out cost ~6% of account equity in one trade instead
+    # of the intended ~1%. The fix must bound dollar risk to risk_pct of
+    # equity NO MATTER how large the position's size already is.
+    client = StubHLClient()
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    pos = [Position(coin="POPCAT", side="long", size=340.0, entry=0.045207, unrealized_pnl=0.0, leverage=3.0)]
+    account_value = 5.39
+
+    enforced = t.enforce_brackets(pos, account_value=account_value)
+    stop_loss = enforced[0]["stop_loss"]
+    dollar_risk = (pos[0].entry - stop_loss) * pos[0].size
+    assert dollar_risk <= account_value * 0.01 + 1e-9  # never more than the configured 1% risk
+    # a flat 2% stop on this size would have risked ~$0.31 — 6x the intended ~$0.05
+    naive_2pct_risk = pos[0].entry * 0.02 * pos[0].size
+    assert dollar_risk < naive_2pct_risk / 3
+
+
+def test_enforce_brackets_backfills_tracking_for_untracked_but_protected_position():
+    # Simulates POPCAT's real situation: a previous process attached a bracket
+    # and then restarted (or never had oid-tracking at all), so this fresh
+    # trader has no _tracked entry even though the position is protected.
+    client = StubHLClient()
+    client.resting = {"POPCAT": [
+        {"triggerPx": "0.044303", "oid": 501},  # below entry -> SL for a long
+        {"triggerPx": "0.047015", "oid": 502},  # above entry -> TP for a long
+    ]}
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    pos = [Position(coin="POPCAT", side="long", size=340.0, entry=0.045207, unrealized_pnl=0.0, leverage=3.0)]
+
+    enforced = t.enforce_brackets(pos, account_value=5.39)
+    assert enforced == []  # nothing needed attaching
+    assert not any(c[0] == "attach_bracket" for c in client.calls)
+    tracked = t._tracked["POPCAT"]
+    assert tracked["sl_oid"] == 501 and tracked["tp_oid"] == 502
+    assert abs(tracked["stop_loss"] - 0.044303) < 1e-9
+    assert abs(tracked["take_profit"] - 0.047015) < 1e-9
+
+    # and now ratchet_stops can actually act on it going forward
+    risk_per_unit = 0.045207 - 0.044303
+    pos_1r = [Position(coin="POPCAT", side="long", size=340.0, entry=0.045207,
+                        unrealized_pnl=risk_per_unit * 340.0, leverage=3.0)]
+    ratcheted = t.ratchet_stops(pos_1r)
+    assert len(ratcheted) == 1 and ratcheted[0]["milestone"] == 1
+    call = next(c for c in client.calls if c[0] == "modify_trigger_order")
+    assert call[2] == 501  # moved the SL leg specifically, by its real oid
+
+
+def test_enforce_brackets_warns_but_does_not_crash_on_failure():
+    client = StubHLClient(bracket_error=True)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    pos = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1, unrealized_pnl=0.0, leverage=3.0)]
+    enforced = t.enforce_brackets(pos, account_value=1000.0)
+    assert enforced == []
+    assert "ETH" not in t._tracked
+
+
+# ---- trader ratchet_stops() ------------------------------------------------
+# _eth_plan(): entry=1822.1, stop_loss=1819.73 -> risk_per_unit=2.37, size=0.0089
+
+def test_ratchet_stops_noop_below_first_milestone():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+
+    pos = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1,
+                     unrealized_pnl=1.0 * 0.0089, leverage=3.0)]  # ~0.42R, below the first milestone
+    assert t.ratchet_stops(pos) == []
+    assert not any(c[0] == "modify_trigger_order" for c in client.calls)
+
+
+def test_ratchet_stops_locks_in_quarter_r_at_first_milestone():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+
+    pos = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1,
+                     unrealized_pnl=2.37 * 0.0089, leverage=3.0)]  # exactly 1R
+    ratcheted = t.ratchet_stops(pos)
+    assert len(ratcheted) == 1 and ratcheted[0]["milestone"] == 1
+    expected_sl = 1822.1 + 0.25 * 2.37
+    assert abs(ratcheted[0]["new_stop_loss"] - expected_sl) < 1e-9
+    assert t._tracked["ETH"]["milestones_locked"] == 1
+    call = next(c for c in client.calls if c[0] == "modify_trigger_order")
+    assert call[1] == "ETH" and call[2] == 2  # sl_oid, from attach_bracket's stubbed response
+    assert call[3] is False  # is_buy=False to close a long
+
+
+def test_ratchet_stops_jumps_multiple_milestones_in_one_pass():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+
+    pos = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1,
+                     unrealized_pnl=3 * 2.37 * 0.0089, leverage=3.0)]  # 3R in a single 30s poll gap
+    ratcheted = t.ratchet_stops(pos)
+    assert ratcheted[0]["milestone"] == 3
+    assert t._tracked["ETH"]["milestones_locked"] == 3
+    expected_sl = 1822.1 + 0.75 * 2.37  # 3 milestones * 0.25R each
+    assert abs(ratcheted[0]["new_stop_loss"] - expected_sl) < 1e-9
+
+
+def test_ratchet_stops_same_milestone_is_a_noop_on_next_pass():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+    pos = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1, unrealized_pnl=2.37 * 0.0089, leverage=3.0)]
+    t.ratchet_stops(pos)
+    calls_before = len(client.calls)
+
+    assert t.ratchet_stops(pos) == []  # still 1R, no new milestone
+    assert len(client.calls) == calls_before  # no additional modify_trigger_order call
+
+
+def test_ratchet_stops_never_loosens_if_price_pulls_back():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+    pos_2r = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1,
+                        unrealized_pnl=2 * 2.37 * 0.0089, leverage=3.0)]
+    t.ratchet_stops(pos_2r)
+    locked_sl = t._tracked["ETH"]["stop_loss"]
+
+    pos_1r = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1,
+                        unrealized_pnl=1 * 2.37 * 0.0089, leverage=3.0)]
+    assert t.ratchet_stops(pos_1r) == []  # pulled back to 1R
+    assert t._tracked["ETH"]["stop_loss"] == locked_sl  # still locked at the 2R level, not loosened
+
+
+def test_ratchet_stops_symmetric_for_short():
+    client = StubHLClient(fill_size=0.1, fill_price=100.0)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    short_plan = TradePlan(coin="BTC", side="short", usd=10.0, leverage=3, entry=100.0,
+                            stop_loss=102.0, take_profit=94.0, risk_pct=1.0)
+    t.execute(short_plan)  # risk_per_unit = 2.0
+
+    pos = [Position(coin="BTC", side="short", size=0.1, entry=100.0,
+                     unrealized_pnl=2.0 * 0.1, leverage=3.0)]  # exactly 1R for a short
+    ratcheted = t.ratchet_stops(pos)
+    assert len(ratcheted) == 1 and ratcheted[0]["milestone"] == 1
+    expected_sl = 100.0 - 0.25 * 2.0  # stop tightens DOWNWARD for a short
+    assert abs(ratcheted[0]["new_stop_loss"] - expected_sl) < 1e-9
+    call = next(c for c in client.calls if c[0] == "modify_trigger_order")
+    assert call[3] is True  # is_buy=True to close a short
+
+
+def test_ratchet_stops_skips_positions_without_sl_oid():
+    client = StubHLClient()
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t._tracked["ETH"] = {"side": "long", "entry": 1822.1, "initial_stop_loss": 1819.73,
+                          "stop_loss": 1819.73, "take_profit": 1826.84, "milestones_locked": 0}
+    pos = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1, unrealized_pnl=2.37 * 0.0089, leverage=3.0)]
+    assert t.ratchet_stops(pos) == []
+
+
+def test_ratchet_stops_warns_but_does_not_crash_on_modify_failure():
+    client = StubHLClient(fill_size=0.0089, fill_price=1822.1)
+    t = HyperliquidTrader(client=client, strategy=None, screener=None, risk_pct=1.0, leverage=3)
+    t.execute(_eth_plan())
+    client.bracket_error = True  # now make modify_trigger_order fail too
+    pos = [Position(coin="ETH", side="long", size=0.0089, entry=1822.1, unrealized_pnl=2.37 * 0.0089, leverage=3.0)]
+    ratcheted = t.ratchet_stops(pos)
+    assert ratcheted == []
+    assert t._tracked["ETH"]["milestones_locked"] == 0  # unchanged
+
+
+# ---- guard_check() / combined ledger ---------------------------------------
+
+def test_guard_check_blocked_by_halted_combined_guard():
+    # A halted combined_guard must block a trade even though this venue's own
+    # capital_guard (and its own account_value) would otherwise be fine —
+    # that's the entire point of a cross-venue circuit breaker.
+    combined = CapitalGuard(max_daily_loss_pct=3.0)
+    combined.update(100.0, date(2026, 7, 20))
+    combined.update(90.0, date(2026, 7, 20))  # -10%, past the 3% limit -> halted
+    assert combined.halted
+
+    t = HyperliquidTrader(client=StubHLClient(), strategy=None, screener=None,
+                           risk_pct=1.0, leverage=3, combined_guard=combined)
+    allowed, reason = t.guard_check(account_value=100000.0)  # this venue looks fine
+    assert not allowed
+    assert "combined ledger" in reason
+
+
+def test_guard_check_passes_through_when_combined_guard_not_halted():
+    combined = CapitalGuard(max_daily_loss_pct=3.0)
+    combined.update(100.0, date(2026, 7, 20))  # no loss yet -> not halted
+
+    t = HyperliquidTrader(client=StubHLClient(), strategy=None, screener=None,
+                           risk_pct=1.0, leverage=3, combined_guard=combined)
+    allowed, reason = t.guard_check(account_value=100000.0)  # no per-venue guard configured
+    assert allowed and reason is None
+
+
+def test_guard_check_confidence_floor_blocks_and_allows():
+    # Runtime authorization floor: a raised floor blocks a lower-confidence
+    # signal even though everything else is fine. Monkeypatch the live_state
+    # reader so the test never touches the real live_state.json.
+    from bot.hyperliquid import trader as trader_mod
+    orig = trader_mod.live_state.get_min_confidence
+    trader_mod.live_state.get_min_confidence = lambda *a, **k: 0.85
+    try:
+        t = HyperliquidTrader(client=StubHLClient(), strategy=None, screener=None,
+                               risk_pct=1.0, leverage=3)
+        blocked, reason = t.guard_check(account_value=100000.0, confidence=0.70)
+        assert not blocked and "authorization floor" in reason
+        ok, _ = t.guard_check(account_value=100000.0, confidence=0.90)
+        assert ok  # at/above the floor, no per-venue guard configured
+        # The exact boundary: confidence == floor must ALSO pass ("85% and
+        # above must fire" means >=, not a strict > that would silently
+        # reject exactly-85% signals).
+        at_floor, _ = t.guard_check(account_value=100000.0, confidence=0.85)
+        assert at_floor
+        just_below, reason_below = t.guard_check(account_value=100000.0, confidence=0.849999)
+        assert not just_below and "authorization floor" in reason_below
+    finally:
+        trader_mod.live_state.get_min_confidence = orig
+
+
+def test_guard_check_without_confidence_skips_floor():
+    # Callers that don't pass confidence (e.g. non-signal contexts) must not be
+    # blocked by the floor — the check only applies when confidence is supplied.
+    from bot.hyperliquid import trader as trader_mod
+    orig = trader_mod.live_state.get_min_confidence
+    trader_mod.live_state.get_min_confidence = lambda *a, **k: 0.99
+    try:
+        t = HyperliquidTrader(client=StubHLClient(), strategy=None, screener=None,
+                               risk_pct=1.0, leverage=3)
+        ok, reason = t.guard_check(account_value=100000.0)  # no confidence arg
+        assert ok and reason is None
+    finally:
+        trader_mod.live_state.get_min_confidence = orig
 
 
 def _run_all():

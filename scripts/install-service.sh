@@ -1,5 +1,5 @@
 #!/bin/bash
-# Install the SMC auto-trader as a 24/7 launchd service (macOS LaunchAgent).
+# Install the TraderX auto-trader as a 24/7 launchd service (macOS LaunchAgent).
 # It starts at login, restarts automatically if it crashes, and runs the
 # screened live watchlist loop continuously.
 set -e

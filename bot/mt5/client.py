@@ -62,11 +62,16 @@ class MT5Client:
         login: str = "",
         password: str = "",
         server: str = "",
+        terminal_path: str = "",
     ) -> "MT5Client":
         from mt5linux import MetaTrader5  # lazy: only needed for a live bridge
 
         raw = MetaTrader5(host=host, port=int(port))
-        if not raw.initialize():
+        # Without an explicit path, initialize() looks up the terminal via the
+        # Windows registry — which is empty when the terminal was unpacked
+        # from the macOS-native .app bundle instead of the Windows installer.
+        initialized = raw.initialize(path=terminal_path) if terminal_path else raw.initialize()
+        if not initialized:
             raise ConnectionError(
                 f"MT5 initialize() failed at {host}:{port} — is the remote "
                 f"terminal + mt5linux server running? last_error={raw.last_error()}"
@@ -169,6 +174,44 @@ class MT5Client:
         if not positions:
             return None
         return positions[0]
+
+    def all_positions(self) -> list[dict]:
+        """Every open position across all symbols, for account-wide reporting."""
+        out = []
+        for p in self._mt5.positions_get() or []:
+            out.append({
+                "symbol": p.symbol,
+                "side": "long" if p.type == 0 else "short",
+                "volume": float(p.volume),
+                "price_open": float(p.price_open),
+                "sl": float(p.sl),
+                "tp": float(p.tp),
+                "profit": float(p.profit),
+                "ticket": int(p.ticket),
+            })
+        return out
+
+    def closed_deals(self, days: int = 30) -> list[dict]:
+        """Closing deals (realized P&L) over the trailing N days, most recent first."""
+        import datetime
+
+        now = datetime.datetime.now()
+        since = now - datetime.timedelta(days=days)
+        deals = self._mt5.history_deals_get(since, now)
+        out = []
+        for d in deals or []:
+            if d.entry != 1:  # DEAL_ENTRY_OUT — the closing half of a trade
+                continue
+            out.append({
+                "symbol": d.symbol,
+                "profit": float(d.profit),
+                "volume": float(d.volume),
+                "price": float(d.price),
+                "time": int(d.time),
+                "ticket": int(d.ticket),
+            })
+        out.sort(key=lambda d: d["time"], reverse=True)
+        return out
 
     def close_position(self, position):
         """Close an open MT5 position by sending the opposite market deal."""

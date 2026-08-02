@@ -20,6 +20,7 @@ from bot.wallet import DefiWallet
 class StubInfo:
     def __init__(self):
         self.calls = []
+        self.frontend_orders = []
 
     def meta(self, dex=""):
         return {"universe": [
@@ -46,6 +47,19 @@ class StubInfo:
             ],
         }
 
+    def frontend_open_orders(self, address, dex=""):
+        return self.frontend_orders
+
+    def meta_and_asset_ctxs(self):
+        meta = self.meta()
+        ctxs = [
+            {"markPx": "51000.0", "prevDayPx": "50000.0", "funding": "0.0000046387"},  # BTC
+            {"markPx": "1900.0", "prevDayPx": "2000.0", "funding": "-0.0000123"},  # ETH
+            {"markPx": "300.0", "prevDayPx": "300.0"},  # XMR -- no funding field
+            {"markPx": "4000.0", "prevDayPx": "0"},  # PAXG -- prevDayPx 0 (no listed 24h change)
+        ]
+        return meta, ctxs
+
 
 class StubExchange:
     def __init__(self):
@@ -62,6 +76,18 @@ class StubExchange:
     def market_close(self, coin, sz=None, px=None, slippage=0.05, cloid=None, builder=None):
         self.calls.append(("market_close", coin))
         return {"status": "ok", "closed": coin}
+
+    def bulk_orders(self, order_requests, builder=None, grouping="na"):
+        self.calls.append(("bulk_orders", order_requests, grouping))
+        return {"status": "ok", "response": {"type": "order", "data": {
+            "statuses": [{"resting": {"oid": 1}} for _ in order_requests]
+        }}}
+
+    def modify_order(self, oid, name, is_buy, sz, limit_px, order_type, reduce_only=False, cloid=None):
+        self.calls.append(("modify_order", oid, name, is_buy, sz, limit_px, order_type, reduce_only))
+        return {"status": "ok", "response": {"type": "order", "data": {
+            "statuses": [{"resting": {"oid": oid}}]
+        }}}
 
 
 def _client(with_exchange=True):
@@ -138,6 +164,117 @@ def test_gold_alias_routes_to_paxg():
     assert ex.calls[-1] == ("market_close", "PAXG")
 
 
+def test_attach_bracket_on_long_closes_with_sells():
+    c, ex = _client()
+    c.attach_bracket("ETH", is_buy=True, size=0.0089, stop_loss=1819.73, take_profit=1826.84)
+    kind, orders, grouping = ex.calls[-1]
+    assert kind == "bulk_orders" and grouping == "positionTpsl"
+    assert len(orders) == 2
+    for o in orders:
+        assert o["coin"] == "ETH" and o["is_buy"] is False  # closing a long -> sell
+        assert o["sz"] == 0.0089 and o["reduce_only"] is True
+    tpsl_by_label = {o["order_type"]["trigger"]["tpsl"]: o for o in orders}
+    # ETH szDecimals=4 -> 6-4=2 decimal places, so 1819.73/1826.84 round to 1819.7/1826.8
+    assert tpsl_by_label["sl"]["order_type"]["trigger"]["triggerPx"] == 1819.7
+    assert tpsl_by_label["tp"]["order_type"]["trigger"]["triggerPx"] == 1826.8
+    # sell-side limit sits below its (rounded) trigger — worst acceptable fill, guarantees exit
+    assert tpsl_by_label["sl"]["limit_px"] < 1819.7
+    assert tpsl_by_label["tp"]["limit_px"] < 1826.8
+
+
+def test_attach_bracket_on_short_closes_with_buys():
+    c, ex = _client()
+    c.attach_bracket("BTC", is_buy=False, size=0.002, stop_loss=51000, take_profit=48000)
+    kind, orders, grouping = ex.calls[-1]
+    assert kind == "bulk_orders" and grouping == "positionTpsl"
+    for o in orders:
+        assert o["is_buy"] is True  # closing a short -> buy
+        assert o["reduce_only"] is True
+    tpsl_by_label = {o["order_type"]["trigger"]["tpsl"]: o for o in orders}
+    # buy-side limit sits above its trigger (worst acceptable fill, guarantees exit)
+    assert tpsl_by_label["sl"]["limit_px"] > 51000
+    assert tpsl_by_label["tp"]["limit_px"] > 48000
+
+
+def test_attach_bracket_rounds_triggerpx_not_just_limitpx():
+    # Real live bug: plan.stop_loss/take_profit carry ordinary float-arithmetic
+    # noise (e.g. 0.045182771999999996). Only limit_px was rounded — triggerPx
+    # was sent raw and Hyperliquid's wire encoder rejected it outright
+    # ("float_to_wire causes rounding"), leaving a filled position unprotected.
+    c, ex = _client()
+    noisy_sl = 0.045182771999999996
+    noisy_tp = 310.33333333333331
+    c.attach_bracket("XMR", is_buy=True, size=1.0, stop_loss=noisy_sl, take_profit=noisy_tp)
+    _, orders, _ = ex.calls[-1]
+    for o in orders:
+        trigger_px = o["order_type"]["trigger"]["triggerPx"]
+        # XMR szDecimals=2 -> 6-2=4 decimal places max
+        assert round(trigger_px, 4) == trigger_px, trigger_px
+        assert round(o["limit_px"], 4) == o["limit_px"], o["limit_px"]
+
+
+def test_attach_bracket_price_precision_is_asset_specific():
+    # BTC szDecimals=5 -> only 6-5=1 decimal place allowed, AND capped at 5
+    # significant figures — a $51234.5678 stop gets chunky, by venue design.
+    c, ex = _client()
+    c.attach_bracket("BTC", is_buy=True, size=0.01, stop_loss=51234.5678, take_profit=53000.1234)
+    _, orders, _ = ex.calls[-1]
+    sl = next(o for o in orders if o["order_type"]["trigger"]["tpsl"] == "sl")
+    assert sl["order_type"]["trigger"]["triggerPx"] == 51235.0
+
+
+def test_modify_trigger_order_moves_price_in_place():
+    c, ex = _client()
+    c.modify_trigger_order("ETH", oid=42, is_buy=False, size=0.0089, trigger_px=1820.5, tpsl="sl")
+    kind, oid, coin, is_buy, sz, limit_px, order_type, reduce_only = ex.calls[-1]
+    assert kind == "modify_order" and oid == 42
+    assert coin == "ETH" and is_buy is False and sz == 0.0089 and reduce_only is True
+    # ETH szDecimals=4 -> 6-4=2 decimals
+    assert order_type["trigger"]["triggerPx"] == 1820.5
+    assert order_type["trigger"]["tpsl"] == "sl"
+    assert limit_px < 1820.5  # sell-side worst-case sits below the trigger
+
+
+def test_modify_trigger_order_requires_exchange():
+    c, _ = _client(with_exchange=False)
+    try:
+        c.modify_trigger_order("ETH", oid=1, is_buy=False, size=0.01, trigger_px=1800, tpsl="sl")
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass
+
+
+def test_open_trigger_orders_filters_to_triggers_and_coin():
+    c, _ = _client()
+    c.info.frontend_orders = [
+        {"coin": "ETH", "isTrigger": True, "reduceOnly": True},
+        {"coin": "ETH", "isTrigger": True, "reduceOnly": True},
+        {"coin": "BTC", "isTrigger": True, "reduceOnly": True},
+        {"coin": "ETH", "isTrigger": False, "reduceOnly": False},  # a resting limit order, not a bracket leg
+    ]
+    assert len(c.open_trigger_orders("ETH")) == 2
+    assert len(c.open_trigger_orders("BTC")) == 1
+    assert len(c.open_trigger_orders()) == 3  # unfiltered: all triggers, any coin
+
+
+def test_open_trigger_orders_requires_address():
+    c = HyperliquidClient(StubInfo(), StubExchange(), address=None, testnet=True)
+    try:
+        c.open_trigger_orders("ETH")
+        assert False, "expected RuntimeError"
+    except RuntimeError:
+        pass
+
+
+def test_attach_bracket_requires_exchange():
+    c, _ = _client(with_exchange=False)
+    try:
+        c.attach_bracket("BTC", is_buy=True, size=0.01, stop_loss=90, take_profit=110)
+        assert False, "expected RuntimeError on read-only client"
+    except RuntimeError:
+        pass
+
+
 def test_readonly_client_cannot_trade():
     c, _ = _client(with_exchange=False)
     for fn in (lambda: c.long("BTC", 100), lambda: c.short("BTC", 100), lambda: c.close("BTC")):
@@ -156,6 +293,16 @@ def test_account_parses_positions():
     assert byc["BTC"].side == "long" and byc["BTC"].size == 0.01 and byc["BTC"].leverage == 5
     assert byc["ETH"].side == "short" and byc["ETH"].size == 0.5
     assert byc["ETH"].unrealized_pnl == -5.0
+
+
+def test_watchlist_tickers_includes_funding_rate_when_present():
+    c, _ = _client()
+    rows = {r["symbol"]: r for r in c.watchlist_tickers(["BTC", "ETH", "XMR", "PAXG"])}
+    assert rows["BTC"]["funding_rate"] == 0.0000046387
+    assert rows["ETH"]["funding_rate"] == -0.0000123
+    assert "funding_rate" not in rows["XMR"]  # stub ctx has no funding field
+    assert "change_24h_pct" not in rows["PAXG"]  # prevDayPx is 0 -> no 24h change reported
+    assert rows["BTC"]["change_24h_pct"] == 2.0  # (51000-50000)/50000*100
 
 
 def test_wallet_create_and_roundtrip(tmp_path=None):

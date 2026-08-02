@@ -1,1 +1,1 @@
-"""SMC Trading Bot — Smart Money Concepts strategy."""
+"""TraderX — Smart Money Concepts strategy."""

@@ -4,8 +4,20 @@
     {
       "name": "dashboard",
       "runtimeExecutable": "venv/bin/python",
-      "runtimeArgs": ["-m", "http.server", "8000", "--directory", "webapp"],
-      "port": 8000
+      "runtimeArgs": ["webapp/server.py"],
+      "port": 8420
+    },
+    {
+      "name": "sllo-site",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "/Users/mac/Sllo/site", "run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "clipperx-dashboard",
+      "runtimeExecutable": "/Users/mac/venv/fc25-clip-bot/venv/bin/python",
+      "runtimeArgs": ["/Users/mac/venv/fc25-clip-bot/dashboard/server.py"],
+      "port": 8787
     }
   ]
 }

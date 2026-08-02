@@ -3,7 +3,7 @@ timeframe: 15m
 higher_timeframe: 1h
 
 # Venue: cex (Binance via CCXT) | evm (on-chain DEX) | mt5 (MetaTrader 5 bridge)
-venue: cex
+venue: mt5
 
 # SMC parameters
 swing_lookback: 5
@@ -15,6 +15,27 @@ liquidity_tolerance_pct: 0.0005
 risk_per_trade_pct: 1.0
 reward_risk_ratio: 2.0
 max_open_trades: 1
+
+# Fixed stop-loss distance from entry for every live trade, REPLACING the
+# order-block/FVG-boundary invalidation stop SMCStrategy would otherwise use
+# — set at explicit user request, paired with screening.max_stop_pct below
+# (raised from 2% to 25% so the Sniper-entry gate can still pass a 20% stop).
+# null/omitted keeps the original structural stop (used by backtests,
+# scan.py, and market_snapshot.py's informational second-opinion strategy,
+# none of which read this key).
+stop_loss_pct: 0.20
+
+# Staged fixed-dollar risk per trade, overriding risk_per_trade_pct above
+# when enabled — set at explicit user request: $3/trade while combined
+# capital+profit (both venues, via bot/combined_ledger.py) is below
+# threshold_usd, $6/trade once it reaches or exceeds it. Recomputed fresh
+# every pass against the live combined balance (bot/position_sizing.py's
+# staged_fixed_risk_usd/risk_pct_for_fixed_usd).
+fixed_risk_usd:
+  enabled: true
+  low: 3.0
+  high: 6.0
+  threshold_usd: 100.0
 
 # Paper trading
 initial_balance: 10000.0
@@ -28,8 +49,25 @@ evm_slippage_pct: 0.5
 # Symbol name must match your broker exactly, including any suffix
 # (e.g. EURUSD, XAUUSD, BTCUSD, EURUSD.r). Timeframe reuses the same
 # strings as above (1m/5m/15m/30m/1h/4h/1d).
-mt5_symbol: EURUSD
+# mt5_backend: bridge (default) needs a Windows box running mt5linux, set
+#              MT5_HOST/MT5_PORT/MT5_LOGIN/MT5_PASSWORD/MT5_SERVER in .env.
+#              metaapi needs no box of your own — set METAAPI_TOKEN plus the
+#              same MT5_LOGIN/MT5_PASSWORD/MT5_SERVER in .env.
+mt5_backend: bridge
+mt5_symbol: EURUSDc
 mt5_timeframe: 15m
+# Cent account: the broker reports balance/PnL in cents, not dollars
+# (100 units = $1). Position sizing is unaffected — tick_value is reported
+# in the same cent units, so the risk math is already self-consistent — this
+# flag only fixes the human-facing $ balance/PnL printouts.
+mt5_cent_account: true
+# Symbols to scan every poll cycle (each gets its own position slot; overrides
+# mt5_symbol above when set). Confirmed against this account's actual symbol
+# list — this broker's Cent account naming uses a trailing "c" suffix.
+# US30 (and every other index CFD) is NOT available on Exness Cent accounts —
+# checked directly against the account's symbol universe, not just Market
+# Watch — so it's left out; it needs a Standard/Zero/Pro account type instead.
+mt5_watchlist: [EURUSDc, USDJPYc, GBPUSDc, GBPJPYc, XAUUSDc, BTCUSDc, ETHUSDc]
 
 # Backtest defaults
 backtest_bars: 2000
@@ -41,14 +79,14 @@ hyperliquid:
   # Majors — PAXG is tokenized gold; XMR is a listed perp (no Monero-chain custody)
   majors: [BTC, ETH, SOL, HYPE, WLD, XMR, PAXG]
   # Sample memecoins (k-prefixed = 1000x-denominated on Hyperliquid)
-  memecoins: [kPEPE, WIF, POPCAT, FARTCOIN, TRUMP, DOGE, GOAT, MOODENG, PNUT, kBONK, kSHIB, MELANIA]
+  memecoins: [kPEPE, WIF, POPCAT, FARTCOIN, TRUMP, DOGE, GOAT, MOODENG, PNUT, kBONK, kSHIB, MELANIA, BRETT]
 
 # Trade screening — a signal must clear ALL of these before it is approved to trade
 screening:
   min_confidence: 0.55     # SMC confluence score floor
   min_rr: 2.0              # minimum reward:risk
   sniper_confidence: 0.65  # confidence required for a "sniper" entry
-  max_stop_pct: 0.02       # tightest invalidation for a sniper entry (2%)
+  max_stop_pct: 0.25       # raised from 2% to fit the fixed stop_loss_pct (0.20) above
   ote_low: 0.618           # Fibonacci golden-pocket bounds (OTE zone)
   ote_high: 0.786
   liquidity_tolerance_pct: 0.0005  # equal-high/low tolerance for liquidity pools
@@ -61,4 +99,23 @@ capital_guard:
   max_daily_loss_pct: 3.0
   max_drawdown_pct: 10.0
   max_concurrent_trades: 3
-  max_concurrent_open_risk_pct: 3.0
+  # Raised from 3.0 at explicit user request: fixed_risk_usd above means a
+  # single trade's risk_pct is now $3/combined_balance -- at the account's
+  # current ~$8 combined balance that's ~37.5%, which the old 3% cap would
+  # have blocked outright (silently, with no trade ever firing). This is a
+  # REAL loosening of a capital-preservation control, not a cosmetic
+  # change -- max_daily_loss_pct/max_drawdown_pct above are UNCHANGED and
+  # still the backstop if a trade goes against the account.
+  max_concurrent_open_risk_pct: 40.0
+  # Everything below is OFF by default (uncomment to enable) — added for the
+  # "self-evolving bot" blueprint's Section 7 breakers. Each is independent;
+  # turning one on doesn't change the others' behavior.
+  # max_weekly_loss_pct: 6.0             # halts for a fixed 48h once tripped
+  # consecutive_loss_limit: 3            # halves new-trade size until 2 wins in a row
+  # vix_halt_threshold: 30.0             # needs `vix=` passed into CapitalGuard.update()
+  # correlated_crash_btc_pct: -5.0       # both this AND spx_pct must trip together
+  # correlated_crash_spx_pct: -3.0
+  # liquidity_shock_spread_pct: 0.1
+  # liquidity_shock_volume_drop_pct: -50.0
+  # profit_lock_trigger_pct: 20.0        # check_profit_lock() reports a lock amount; a human executes the move
+  # profit_lock_fraction: 0.10
