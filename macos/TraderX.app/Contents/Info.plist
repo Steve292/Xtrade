@@ -3,11 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>SMC Bot</string>
+    <string>TraderX</string>
     <key>CFBundleDisplayName</key>
-    <string>SMC Trading Bot</string>
+    <string>TraderX</string>
     <key>CFBundleIdentifier</key>
-    <string>com.smc.tradingbot</string>
+    <string>com.traderx.tradingbot</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleExecutable</key>
