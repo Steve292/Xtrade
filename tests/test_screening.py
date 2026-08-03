@@ -592,6 +592,72 @@ def test_guard_check_without_confidence_skips_floor():
         trader_mod.live_state.get_min_confidence = orig
 
 
+# ---- auto-fire vs. queue split -------------------------------------------
+
+class _StubUnified:
+    def __init__(self, final_pct, direction="BULLISH", agreement=4):
+        self.final_pct = final_pct
+        self.smart_money_direction = direction
+        self.smart_money_agreement_count = agreement
+
+
+def _stub_plan():
+    return TradePlan(coin="BTC", side="long", usd=250.0, leverage=3, entry=100.0,
+                     stop_loss=80.0, take_profit=140.0, risk_pct=1.0)
+
+
+def _queue_decision(final_pct, threshold, queue_path):
+    """Run queue_if_below_auto_fire with both live_state and the queue file
+    redirected, so nothing touches the real live_state.json / queue."""
+    from bot.hyperliquid import trader as trader_mod
+    orig_get = trader_mod.live_state.get_auto_fire_pct
+    orig_add = trader_mod.pending_trades.add
+    calls = []
+    trader_mod.live_state.get_auto_fire_pct = lambda *a, **k: threshold
+    trader_mod.pending_trades.add = lambda **kw: calls.append(kw) or kw
+    try:
+        result = HyperliquidTrader.queue_if_below_auto_fire(
+            "BTC", _long_signal(100.0), _stub_plan(), _StubUnified(final_pct)
+        )
+        return result, calls
+    finally:
+        trader_mod.live_state.get_auto_fire_pct = orig_get
+        trader_mod.pending_trades.add = orig_add
+
+
+def test_at_or_above_auto_fire_threshold_fires_and_does_not_queue():
+    result, calls = _queue_decision(final_pct=90.0, threshold=90.0, queue_path=None)
+    assert result is None      # None == "caller should fire now"
+    assert calls == []         # nothing queued
+
+
+def test_below_auto_fire_threshold_queues_instead_of_firing():
+    result, calls = _queue_decision(final_pct=74.0, threshold=90.0, queue_path=None)
+    assert result == 90.0      # returns the threshold it fell short of
+    assert len(calls) == 1
+    assert calls[0]["venue"] == "hl"
+    assert calls[0]["symbol"] == "BTC"
+    assert calls[0]["side"] == "long"
+    assert calls[0]["final_pct"] == 74.0
+
+
+def test_queued_entry_carries_the_plans_prices_not_the_raw_signals():
+    _, calls = _queue_decision(final_pct=50.0, threshold=90.0, queue_path=None)
+    assert calls[0]["stop_loss"] == 80.0
+    assert calls[0]["take_profit"] == 140.0
+    assert calls[0]["size"] == 250.0  # USD notional on this venue
+
+
+def test_threshold_of_zero_fires_everything():
+    result, calls = _queue_decision(final_pct=1.0, threshold=0.0, queue_path=None)
+    assert result is None and calls == []
+
+
+def test_threshold_of_100_queues_all_but_a_perfect_score():
+    result, calls = _queue_decision(final_pct=99.9, threshold=100.0, queue_path=None)
+    assert result == 100.0 and len(calls) == 1
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

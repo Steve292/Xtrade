@@ -94,9 +94,14 @@ def scan_and_report(trader, coins, ltf, htf, account_value, dry_run, withdrawabl
             if not allowed:
                 print(f"  -> BLOCKED by capital guard: {reason}")
             else:
-                print(f">>> LIVE ORDER FIRED: {plan.side.upper()} {coin} ${plan.usd} at {plan.leverage}x "
-                      f"SL={plan.stop_loss:.6g} TP={plan.take_profit:.6g}")
-                print("  ", trader.execute(plan))
+                threshold = trader.queue_if_below_auto_fire(coin, signal, plan, unified)
+                if threshold is not None:
+                    print(f"  -> final {unified.final_pct:.0f}% below auto-fire {threshold:.0f}% "
+                          f"— QUEUED for approval on the control panel")
+                else:
+                    print(f">>> LIVE ORDER FIRED: {plan.side.upper()} {coin} ${plan.usd} at {plan.leverage}x "
+                          f"SL={plan.stop_loss:.6g} TP={plan.take_profit:.6g}")
+                    print("  ", trader.execute(plan))
     if not approved:
         print("\nNo setups cleared the full screen this pass.")
 

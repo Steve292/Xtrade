@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from bot import live_state
+from bot import live_state, pending_trades
 from bot.capital_guard import CapitalGuard, OpenRisk, trading_day
 from bot.screening import ScreenResult, TradeScreener
 from bot.smc.strategy import Signal, SignalType, SMCStrategy
@@ -157,6 +157,33 @@ class HyperliquidTrader:
             OpenRisk(i, self.risk_pct) for i in range(len(self.client.account().positions))
         ]
         return self.capital_guard.can_open_new_trade(open_positions, self.risk_pct)
+
+    @staticmethod
+    def queue_if_below_auto_fire(coin: str, signal: Signal, plan: TradePlan, unified) -> float | None:
+        """Split an approved setup: fire unattended, or park it for review.
+
+        Returns None when final_pct clears the hands-off threshold (caller
+        should fire). Otherwise queues the setup for Approve/Cancel and
+        returns the threshold it fell short of, so the caller can report it.
+
+        Keyed on the unified gate's BLENDED final_pct rather than raw
+        confidence — a high-confidence signal that smart money disagrees with
+        should still get a human look, which is the whole point of the blend.
+        Shared by both Hyperliquid entry points (run_once here and
+        hypertrade.py's scan_and_report) so the two can't drift apart.
+        """
+        threshold = live_state.get_auto_fire_pct()
+        if unified.final_pct >= threshold:
+            return None
+        pending_trades.add(
+            venue="hl", symbol=coin, side=plan.side,
+            entry_price=plan.entry, stop_loss=plan.stop_loss, take_profit=plan.take_profit,
+            confidence=signal.confidence, final_pct=unified.final_pct,
+            smart_money_direction=unified.smart_money_direction,
+            smart_money_agreement=unified.smart_money_agreement_count,
+            size=plan.usd,  # USD notional on this venue (MT5 queues lots instead)
+        )
+        return threshold
 
     def _plan(
         self, coin: str, signal: Signal, account_value: float, withdrawable: float | None = None
@@ -458,7 +485,12 @@ class HyperliquidTrader:
             if not allowed:
                 print(f"  -> BLOCKED by capital guard: {reason}\n")
             else:
-                print(f">>> LIVE ORDER FIRED: {plan.side.upper()} {coin} ${plan.usd} at {plan.leverage}x "
-                      f"SL={plan.stop_loss:.6g} TP={plan.take_profit:.6g}")
-                print("  ", self.execute(plan), "\n")
+                threshold = self.queue_if_below_auto_fire(coin, signal, plan, unified)
+                if threshold is not None:
+                    print(f"  -> final {unified.final_pct:.0f}% below auto-fire {threshold:.0f}% "
+                          f"— QUEUED for approval on the control panel\n")
+                else:
+                    print(f">>> LIVE ORDER FIRED: {plan.side.upper()} {coin} ${plan.usd} at {plan.leverage}x "
+                          f"SL={plan.stop_loss:.6g} TP={plan.take_profit:.6g}")
+                    print("  ", self.execute(plan), "\n")
         return result

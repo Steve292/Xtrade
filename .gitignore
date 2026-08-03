@@ -20,6 +20,7 @@ logs/
 # Capital guard runtime state (local only, not shared config)
 capital_guard_state.json
 combined_guard_state.json
+combined_guard_state.json.bak.*
 live_state.json
 dominance_history.json
 
@@ -33,3 +34,4 @@ dominance_history.json
 bugreport-sdk_gphone64_arm64-*.zip
 msedgewebview2.dxvk-cache
 settings.dat
+pending_trades.json

@@ -41,6 +41,7 @@ from bot.hyperliquid.client import HyperliquidClient
 from bot.hyperliquid.trader import HyperliquidTrader
 from bot.market_snapshot import compute_snapshot
 from bot.mt5.client import MT5Client
+from bot import pending_trades
 from bot.position_sizing import risk_pct_for_fixed_usd, staged_fixed_risk_usd
 from bot.screening import ScreenConfig, TradeScreener
 from bot.smc.strategy import SMCStrategy, SignalType
@@ -362,6 +363,8 @@ def status():
         "venue": "testnet" if HL_CFG.get("testnet", True) else "mainnet",
         "armed": live_state.is_armed(),
         "min_confidence": live_state.get_min_confidence(),
+        "auto_fire_pct": live_state.get_auto_fire_pct(),
+        "pending_count": len(pending_trades.list_pending()),
         "config_min_confidence": CFG.get("screening", {}).get("min_confidence", 0.55),
         "account_value": acct.account_value,
         "withdrawable": acct.withdrawable,
@@ -395,6 +398,20 @@ def threshold():
         return jsonify({"error": "min_confidence must be a number 0..1"}), 400
     live_state.set_min_confidence(value)
     return jsonify({"min_confidence": live_state.get_min_confidence()})
+
+
+@app.post("/api/autofire")
+def autofire():
+    """Set the hands-off threshold (0-100) against the unified gate's blended
+    final_pct. At/above it a setup fires unattended; below it, it's queued for
+    Approve/Cancel. Raising this to 100 effectively means "review everything"."""
+    body = request.get_json(silent=True) or {}
+    try:
+        value = float(body.get("auto_fire_pct"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "auto_fire_pct must be a number 0..100"}), 400
+    live_state.set_auto_fire_pct(value)
+    return jsonify({"auto_fire_pct": live_state.get_auto_fire_pct()})
 
 
 def _get_smart_money() -> tuple[str, int, int]:
@@ -573,6 +590,106 @@ def fire():
 
     resp = trader.execute(plan)
     return jsonify({"result": resp, "plan": {"coin": coin, "side": plan.side, "usd": plan.usd}})
+
+
+@app.get("/api/pending")
+def pending_list():
+    """Setups that cleared the unified gate but landed below the auto-fire
+    threshold, awaiting Approve/Cancel. Read-only; expired entries are purged
+    on read so the panel never shows a stale setup as actionable."""
+    pending_trades.purge_expired()
+    return jsonify({
+        "pending": pending_trades.list_pending(),
+        "auto_fire_pct": live_state.get_auto_fire_pct(),
+        "now": time.time(),
+    })
+
+
+@app.post("/api/pending/cancel")
+def pending_cancel():
+    entry_id = (request.get_json(silent=True) or {}).get("id")
+    if not entry_id:
+        return jsonify({"error": "id required"}), 400
+    entry = pending_trades.resolve(entry_id, "cancelled")
+    if entry is None:
+        return jsonify({"error": "already resolved or expired"}), 404
+    return jsonify({"cancelled": entry_id, "symbol": entry["symbol"]})
+
+
+@app.post("/api/pending/approve")
+def pending_approve():
+    """Approve a queued setup and send the order.
+
+    RE-SCREENS against live market data rather than replaying the queued
+    plan: an entry can sit for minutes while price moves, so the stored
+    prices are a record of what was seen, never an instruction to trade. If
+    the setup no longer clears the gate, this refuses and drops it instead
+    of firing a stale idea. Every gate /api/fire enforces (approved, sizable,
+    armed, capital guard) is enforced here too — approving must not be a way
+    to bypass them.
+
+    Hyperliquid only: MT5 orders go through a separate broker path
+    (bot/mt5/broker.py) that this control panel has no client for, so an MT5
+    entry can be Cancelled here but must be actioned from the MT5 terminal.
+    """
+    entry_id = (request.get_json(silent=True) or {}).get("id")
+    if not entry_id:
+        return jsonify({"error": "id required"}), 400
+
+    entry = pending_trades.get(entry_id)
+    if entry is None:
+        return jsonify({"error": "already resolved or expired"}), 404
+    if entry["venue"] != "hl":
+        return jsonify({
+            "error": f"{entry['symbol']} is an MT5 setup — approve it from the MT5 "
+                     f"terminal; this panel can only fire Hyperliquid orders"
+        }), 400
+    if not live_state.is_armed():
+        return jsonify({"error": "disarmed — flip Activate on first"}), 403
+
+    coin = entry["symbol"]
+    client = _client()
+    trader = _trader(client)
+    acct = client.account()
+    sm_direction, sm_bullish, sm_bearish = _get_smart_money()
+    try:
+        signal, result, plan, unified = trader.evaluate(
+            coin, CFG.get("timeframe", "15m"), CFG.get("higher_timeframe", "1h"),
+            acct.account_value, acct.withdrawable, sm_direction, sm_bullish, sm_bearish,
+        )
+    except Exception as e:
+        # Re-screening itself failed — a delisted/renamed coin, or a venue
+        # hiccup. Either way we have no fresh read, so we must NOT fall back
+        # to the queued prices and fire blind. Drop the entry and say why.
+        pending_trades.resolve(entry_id, "stale")
+        return jsonify({
+            "error": f"{coin} could not be re-screened ({type(e).__name__}) — dropped, no order sent"
+        }), 409
+    if not unified.approved:
+        pending_trades.resolve(entry_id, "stale")
+        return jsonify({"error": f"{coin} no longer clears the gate ({unified.reason}) — dropped"}), 409
+    if plan is None:
+        return jsonify({"error": f"{coin} approved but not sizable (free margin or $10 min)"}), 400
+    if plan.side != entry["side"]:
+        pending_trades.resolve(entry_id, "stale")
+        return jsonify({
+            "error": f"{coin} has flipped to {plan.side.upper()} since it was queued "
+                     f"({entry['side'].upper()}) — dropped rather than fired"
+        }), 409
+    allowed, reason = trader.guard_check(acct.account_value, confidence=signal.confidence)
+    if not allowed:
+        return jsonify({"error": f"blocked: {reason}"}), 403
+
+    # Resolve BEFORE executing: if the order succeeds but resolve() somehow
+    # didn't run, the entry would stay live and could be approved twice.
+    if pending_trades.resolve(entry_id, "approved") is None:
+        return jsonify({"error": "already resolved or expired"}), 404
+    resp = trader.execute(plan)
+    return jsonify({
+        "result": resp,
+        "plan": {"coin": coin, "side": plan.side, "usd": plan.usd,
+                 "final_pct": unified.final_pct},
+    })
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from bot.market_snapshot import get_cached_snapshot
 from bot.mt5.broker import MT5Broker
 from bot.mt5.client import MT5Client
 from bot.mt5.metaapi_client import MetaApiClient
+from bot import pending_trades
 from bot.position_sizing import risk_pct_for_fixed_usd, staged_fixed_risk_usd
 from bot.risk import calc_lot_size, calc_position_size
 from bot.screening import ScreenConfig, TradeScreener
@@ -341,9 +342,9 @@ def run_bot(config_path: str = "config.yaml") -> None:
                                       f"conf {signal.confidence:.0%} — DISARMED, no live order "
                                       f"(arm via the control panel's Activate toggle to enable)")
                                 continue
-                            # Runtime authorization floor (control panel): only the
-                            # higher-probability setups fire when it's raised. Same
-                            # shared live_state value the Hyperliquid path enforces.
+                            # Runtime authorization floor (control panel): setups
+                            # below it aren't worth considering at all — not even
+                            # worth queueing for review.
                             floor = live_state.get_min_confidence()
                             if mode == "live" and signal.confidence < floor:
                                 ts = df.iloc[-1]["timestamp"]
@@ -352,7 +353,32 @@ def run_bot(config_path: str = "config.yaml") -> None:
                                       f"conf {signal.confidence:.0%} below authorization floor "
                                       f"{floor:.0%} — no live order")
                                 continue
+
                             side = "long" if signal.type == SignalType.LONG else "short"
+
+                            # Hands-off threshold, measured against the unified
+                            # gate's BLENDED final_pct (not raw confidence). At or
+                            # above it this fires unattended; below it the setup is
+                            # queued for Approve/Cancel on the control panel rather
+                            # than dropped, so a decent-but-not-automatic setup is
+                            # still actionable instead of vanishing into the log.
+                            auto_fire_pct = live_state.get_auto_fire_pct()
+                            if mode == "live" and unified.final_pct < auto_fire_pct:
+                                pending_trades.add(
+                                    venue=venue, symbol=sym, side=side,
+                                    entry_price=signal.entry, stop_loss=signal.stop_loss,
+                                    take_profit=signal.take_profit, confidence=signal.confidence,
+                                    final_pct=unified.final_pct,
+                                    smart_money_direction=unified.smart_money_direction,
+                                    smart_money_agreement=unified.smart_money_agreement_count,
+                                    size=size,
+                                )
+                                ts = df.iloc[-1]["timestamp"]
+                                prefix = f"[{sym}] " if multi else ""
+                                print(f"{prefix}[{ts}] SIGNAL {signal.type.value.upper()} "
+                                      f"final {unified.final_pct:.0f}% below auto-fire {auto_fire_pct:.0f}% "
+                                      f"— QUEUED for approval on the control panel")
+                                continue
                             if venue == "evm" and evm_dex:
                                 evm_dex.open_position(
                                     side=side,

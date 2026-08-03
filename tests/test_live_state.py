@@ -98,6 +98,57 @@ def test_corrupt_file_defaults_confidence_to_zero():
         path.unlink(missing_ok=True)
 
 
+# ---- auto_fire_pct (hands-off threshold vs. the blended final_pct) --------
+
+def test_auto_fire_pct_defaults_to_100_so_nothing_fires_unattended():
+    # Opposite default to min_confidence on purpose: absent config must mean
+    # "queue everything for approval", never "fire everything".
+    path = _tmp_path()  # never created
+    assert live_state.get_auto_fire_pct(path) == 100.0
+
+
+def test_set_then_get_auto_fire_pct():
+    path = _tmp_path()
+    try:
+        live_state.set_auto_fire_pct(90.0, path)
+        assert live_state.get_auto_fire_pct(path) == 90.0
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_auto_fire_pct_clamped_to_0_100():
+    path = _tmp_path()
+    try:
+        live_state.set_auto_fire_pct(140.0, path)
+        assert live_state.get_auto_fire_pct(path) == 100.0
+        live_state.set_auto_fire_pct(-5.0, path)
+        assert live_state.get_auto_fire_pct(path) == 0.0
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_corrupt_auto_fire_pct_fails_safe_to_100():
+    path = _tmp_path()
+    try:
+        path.write_text('{"auto_fire_pct": "not-a-number"}')
+        assert live_state.get_auto_fire_pct(path) == 100.0
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_all_three_controls_coexist_without_clobbering():
+    path = _tmp_path()
+    try:
+        live_state.set_armed(True, path)
+        live_state.set_min_confidence(0.55, path)
+        live_state.set_auto_fire_pct(90.0, path)
+        assert live_state.is_armed(path) is True
+        assert live_state.get_min_confidence(path) == 0.55
+        assert live_state.get_auto_fire_pct(path) == 90.0
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

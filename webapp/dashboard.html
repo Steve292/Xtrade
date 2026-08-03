@@ -67,6 +67,34 @@
     font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; max-width:80vw; }
   #toast.show { opacity:1; }
   #toast.err { background:var(--dn); }
+
+  /* --- pending approval queue --- */
+  .pend { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:12px; }
+  .pend-card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:13px 14px; }
+  .pend-card.expiring { border-color:rgba(229,169,77,.55); }
+  .pend-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .pend-sym { font-weight:700; font-size:15px; }
+  .pend-score { margin-left:auto; font-variant-numeric:tabular-nums; font-weight:700; font-size:15px; }
+  .pend-meta { font-size:12px; color:var(--mut); line-height:1.65; font-variant-numeric:tabular-nums; }
+  .pend-actions { display:flex; gap:8px; margin-top:11px; }
+  .pend-actions button { flex:1; padding:8px 10px; font-size:13px; }
+  .badge.pending { background:rgba(229,169,77,.16); color:var(--warn); border-color:rgba(229,169,77,.4); }
+  .ttl { font-variant-numeric:tabular-nums; }
+  .ttl.soon { color:var(--warn); font-weight:600; }
+
+  /* Phones: stack the scan table's wide columns instead of overflowing, and
+     give the approve/cancel buttons a full-width tap target. */
+  @media (max-width:560px) {
+    body { padding:18px 12px 48px; }
+    .pend { grid-template-columns:1fr; }
+    .pend-actions { flex-direction:column; }
+    .stat-row { grid-template-columns:repeat(auto-fit,minmax(108px,1fr)); }
+    table { font-size:12px; }
+    th, td { padding:6px 5px; }
+  }
+  /* Any table that still can't fit scrolls on its own rather than forcing
+     the whole page sideways. */
+  .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
 </style>
 </head>
 <body>
@@ -136,10 +164,12 @@
       MT5 Watchlist Signals
       <span class="sub" style="margin:0;font-weight:400;">CVD/heatmap/SMC+Fib/session only — GEX, SSR, meme score, BTC.D have no forex/commodity equivalent</span>
     </h2>
+    <div class="table-scroll">
     <table id="mt5SignalsTable">
       <thead><tr><th>Symbol</th><th>Vote</th><th>CVD</th><th>Heatmap</th><th>SMC+Fib</th><th>Session</th><th>Suggested risk %</th></tr></thead>
       <tbody id="mt5SignalsBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
     </table>
+    </div>
   </section>
 
   <section>
@@ -166,13 +196,50 @@
       </div>
       <div id="thresholdBtns" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
         <button class="ghost thr-btn" data-thr="0">Off (config floor)</button>
+        <button class="ghost thr-btn" data-thr="0.55">55%</button>
         <button class="ghost thr-btn" data-thr="0.65">65%</button>
         <button class="ghost thr-btn" data-thr="0.75">75%</button>
         <button class="ghost thr-btn" data-thr="0.85">85%</button>
         <button class="ghost thr-btn" data-thr="0.90">90%</button>
-        <button class="ghost thr-btn" data-thr="0.95">95%</button>
       </div>
     </div>
+
+    <div style="border-top:1px solid var(--line);padding-top:12px;margin-top:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:13px;font-weight:600;">Auto-fire threshold</div>
+          <div class="sub" style="margin:2px 0 0;">
+            Measured on the blended <b>final %</b> (confidence + smart-money agreement).
+            At or above it, trades fire hands-off. Below it, they queue for your Approve/Cancel.
+          </div>
+        </div>
+        <div style="font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;" id="autoFireValue">—</div>
+      </div>
+      <div id="autoFireBtns" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button class="ghost af-btn" data-af="70">70%</button>
+        <button class="ghost af-btn" data-af="80">80%</button>
+        <button class="ghost af-btn" data-af="90">90%</button>
+        <button class="ghost af-btn" data-af="95">95%</button>
+        <button class="ghost af-btn" data-af="100">Review everything</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>
+      Pending approval
+      <span style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:400;color:var(--mut);">
+        <span id="pendingCount">—</span>
+        <button class="ghost" onclick="refreshPending()" style="padding:6px 12px;font-size:12px;">Refresh</button>
+      </span>
+    </h2>
+    <p class="sub" style="margin:0 0 12px;">
+      Setups that cleared every gate but scored below the auto-fire threshold. Approving
+      <b>re-screens against live prices</b> before sending — a setup that has since gone stale is
+      dropped, never fired on old data. Entries expire on their own after 15 minutes.
+    </p>
+    <div class="pend" id="pendingBody"></div>
+    <div class="empty" id="pendingEmpty">Nothing awaiting approval.</div>
   </section>
 
   <section>
@@ -197,10 +264,12 @@
 
   <section>
     <h2>Open positions</h2>
+    <div class="table-scroll">
     <table id="posTable">
       <thead><tr><th>Coin</th><th>Side</th><th>Size</th><th>Entry</th><th>uPnL</th><th>Lev</th><th>SL / TP</th></tr></thead>
       <tbody id="posBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
     </table>
+    </div>
   </section>
 
   <footer>Local control panel · 127.0.0.1 only · not financial advice</footer>
@@ -249,6 +318,7 @@ async function refreshStatus() {
     document.getElementById('statWatchlist').textContent = s.watchlist_size + ' coins';
     window._armed = s.armed;
     renderThreshold(s.min_confidence, s.config_min_confidence);
+    renderAutoFire(s.auto_fire_pct);
 
     var guardEl = document.getElementById('guardStatus');
     var guard = s.capital_guard || {};
@@ -548,16 +618,117 @@ async function refreshPositions() {
   } catch (e) { toast('positions: ' + e.message, true); }
 }
 
+// ---- auto-fire threshold + pending approval queue -------------------------
+
+function renderAutoFire(pct) {
+  var label = document.getElementById('autoFireValue');
+  label.textContent = (pct >= 100) ? 'Review all' : Math.round(pct) + '%';
+  document.querySelectorAll('.af-btn').forEach(function(b) {
+    var v = parseFloat(b.getAttribute('data-af'));
+    var active = Math.abs(v - (pct || 0)) < 1e-6;
+    b.style.background = active ? 'var(--acc)' : 'var(--card)';
+    b.style.color = active ? '#fff' : 'var(--tx)';
+    b.style.borderColor = active ? 'var(--acc)' : 'var(--line)';
+  });
+}
+
+async function setAutoFire(value) {
+  try {
+    await api('/api/autofire', {method:'POST', headers:{'Content-Type':'application/json'},
+                                body: JSON.stringify({auto_fire_pct: value})});
+    toast(value >= 100 ? 'Auto-fire off — every setup queues for approval'
+                       : ('Auto-fire threshold set to ' + Math.round(value) + '%'));
+    refreshStatus();
+    refreshPending();
+  } catch (e) { toast('auto-fire: ' + e.message, true); }
+}
+
+function fmtTtl(secs) {
+  if (secs <= 0) return 'expired';
+  var m = Math.floor(secs / 60), s = Math.floor(secs % 60);
+  return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+}
+
+async function refreshPending() {
+  try {
+    var d = await api('/api/pending');
+    var rows = d.pending || [];
+    var body = document.getElementById('pendingBody');
+    var empty = document.getElementById('pendingEmpty');
+    document.getElementById('pendingCount').textContent =
+      rows.length ? (rows.length + ' awaiting') : 'none';
+    body.innerHTML = '';
+    empty.style.display = rows.length ? 'none' : '';
+
+    rows.forEach(function(r) {
+      var ttl = (r.expires_at || 0) - (d.now || 0);
+      var soon = ttl < 120;
+      var card = document.createElement('div');
+      card.className = 'pend-card' + (soon ? ' expiring' : '');
+      var venueCls = r.venue === 'mt5' ? 'mt5' : 'hl';
+      var sideCls = r.side === 'long' ? 'up' : 'dn';
+      // MT5 entries can be cancelled here but not fired — this panel only
+      // has a Hyperliquid client (see /api/pending/approve).
+      var canApprove = r.venue === 'hl';
+      card.innerHTML =
+        '<div class="pend-top">' +
+          '<span class="venue-tag ' + venueCls + '">' + (r.venue === 'mt5' ? 'MT5' : 'HL') + '</span>' +
+          '<span class="pend-sym">' + r.symbol + '</span>' +
+          '<span class="' + sideCls + '" style="font-weight:700;font-size:12px;">' + r.side.toUpperCase() + '</span>' +
+          '<span class="pend-score">' + Math.round(r.final_pct) + '%</span>' +
+        '</div>' +
+        '<div class="pend-meta">' +
+          'entry ' + fmtNum(r.entry_price) + ' · SL ' + fmtNum(r.stop_loss) + ' · TP ' + fmtNum(r.take_profit) + '<br>' +
+          'conf ' + Math.round((r.confidence || 0) * 100) + '% · smart money ' +
+          (r.smart_money_direction || 'NEUTRAL') + ' (' + (r.smart_money_agreement || 0) + '/9)<br>' +
+          'expires in <span class="ttl' + (soon ? ' soon' : '') + '">' + fmtTtl(ttl) + '</span>' +
+        '</div>' +
+        '<div class="pend-actions">' +
+          (canApprove
+            ? '<button onclick="approvePending(\'' + r.id + '\',\'' + r.symbol + '\')">Approve</button>'
+            : '<button disabled title="MT5 orders must be actioned from the MT5 terminal">Approve (MT5 n/a)</button>') +
+          '<button class="danger" onclick="cancelPending(\'' + r.id + '\',\'' + r.symbol + '\')">Cancel</button>' +
+        '</div>';
+      body.appendChild(card);
+    });
+  } catch (e) { toast('pending: ' + e.message, true); }
+}
+
+async function approvePending(id, symbol) {
+  if (!confirm('Approve and FIRE a real order for ' + symbol + '?\n\nIt is re-screened against live prices first — if it has gone stale it will be dropped, not fired.')) return;
+  try {
+    var r = await api('/api/pending/approve', {method:'POST', headers:{'Content-Type':'application/json'},
+                                               body: JSON.stringify({id: id})});
+    toast('FIRED ' + symbol + ' ' + r.plan.side.toUpperCase() + ' $' + r.plan.usd);
+  } catch (e) { toast(symbol + ': ' + e.message, true); }
+  refreshPending();
+  refreshPositions();
+}
+
+async function cancelPending(id, symbol) {
+  try {
+    await api('/api/pending/cancel', {method:'POST', headers:{'Content-Type':'application/json'},
+                                      body: JSON.stringify({id: id})});
+    toast('Cancelled ' + symbol);
+  } catch (e) { toast(symbol + ': ' + e.message, true); }
+  refreshPending();
+}
+
 document.querySelectorAll('.thr-btn').forEach(function(b) {
   b.addEventListener('click', function() { setThreshold(parseFloat(b.getAttribute('data-thr'))); });
+});
+document.querySelectorAll('.af-btn').forEach(function(b) {
+  b.addEventListener('click', function() { setAutoFire(parseFloat(b.getAttribute('data-af'))); });
 });
 
 refreshStatus();
 refreshPositions();
 refreshRegime();
+refreshPending();
 setInterval(refreshStatus, 15000);
 setInterval(refreshPositions, 15000);
 setInterval(refreshRegime, 60000);  // server caches the underlying fetch for 15m regardless
+setInterval(refreshPending, 10000); // faster: these expire, and the countdown should look live
 </script>
 </body>
 </html>
