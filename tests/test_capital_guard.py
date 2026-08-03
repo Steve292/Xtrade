@@ -48,25 +48,37 @@ def test_drawdown_halts():
     assert g.halted and "drawdown" in g.halt_reason
 
 
-def test_peak_rebases_on_trading_day_rollover():
-    # A manual balance change (withdrawal), not a bot loss, leaves a stale
-    # historical peak — it must not haunt every future trading day.
+def test_peak_rebases_every_clock_hour():
+    # At explicit user request: peak/day-start now rebase hourly rather than
+    # on the trading-day rollover — even a real, large drawdown gets forgiven
+    # once the next hour bucket starts.
     g = CapitalGuard(max_drawdown_pct=10.0)
-    g.update(100.0, TODAY)
-    g.update(150.0, TODAY)  # peak=150, e.g. a manual deposit mid-day
+    t0 = 1_700_000_000.0  # exact hour boundary
+    g.update(100.0, TODAY, now_ts=t0)
+    g.update(150.0, TODAY, now_ts=t0 + 60)  # peak=150, same hour
     assert g.peak_balance == 150.0
 
-    g.update(120.0, date(2026, 7, 15))  # new trading day — peak rebases to today's balance
+    g.update(120.0, TODAY, now_ts=t0 + 3600)  # next clock hour — peak rebases to today's balance
     assert g.peak_balance == 120.0
     assert not g.halted  # would have been a -20% "drawdown" against the stale peak
 
 
-def test_peak_still_ratchets_up_within_a_trading_day_after_rollover():
+def test_peak_still_ratchets_up_within_the_same_hour_after_rebase():
     g = CapitalGuard(max_drawdown_pct=10.0)
-    g.update(100.0, TODAY)
-    g.update(80.0, date(2026, 7, 15))  # rollover: peak rebases to 80
-    g.update(90.0, date(2026, 7, 15))  # same day, new intraday high
+    t0 = 1_700_000_000.0
+    g.update(100.0, TODAY, now_ts=t0)
+    g.update(80.0, TODAY, now_ts=t0 + 3600)  # new hour: peak rebases to 80
+    g.update(90.0, TODAY, now_ts=t0 + 3600 + 60)  # same hour, new intraday high
     assert g.peak_balance == 90.0
+
+
+def test_peak_does_not_rebase_within_the_same_clock_hour():
+    g = CapitalGuard(max_drawdown_pct=10.0)
+    t0 = float(1_700_000_000 // 3600 * 3600)  # exact hour boundary, so +1800/+3000 can't cross it
+    g.update(100.0, TODAY, now_ts=t0)
+    g.update(120.0, TODAY, now_ts=t0 + 1800)  # new peak, same hour
+    g.update(107.0, TODAY, now_ts=t0 + 3000)  # -10.83% from peak, still same hour
+    assert g.halted and "drawdown" in g.halt_reason  # not forgiven mid-hour
 
 
 def test_can_open_new_trade_respects_halt_and_caps():

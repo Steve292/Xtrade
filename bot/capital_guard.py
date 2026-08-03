@@ -26,17 +26,18 @@ halt_reason text); a human — or an already-armed, separately-approved
 execution path — acts on the report, the same boundary this whole project
 has drawn everywhere else.
 
-peak_balance rebases to the current balance on every trading-day rollover
-(see trading_day() below), same as day_start_balance — at explicit user
-request, after a manual balance change (a withdrawal, not a bot trading
-loss) left a stale historical peak that halted every subsequent trading day
-on a "drawdown" the bot never actually caused. Trade-off, accepted
-deliberately: max_drawdown_pct is now an intraday/per-trading-day check
-rather than a true multi-day cumulative one — it still survives restarts
-WITHIN a trading day (the anti-toothless-guard fix below still applies
-there), but a slow bleed spread thinly across many separate trading days no
-longer trips it on its own; max_daily_loss_pct still bounds each individual
-day independently either way.
+peak_balance and day_start_balance both rebase to the current balance every
+CLOCK HOUR (see the current_hour bucket in update()), not once a trading day
+— at explicit user request, made fully aware of the consequence: with
+max_drawdown_pct=10, an account already down 50%+ from its true peak will
+have that peak (and the daily-loss baseline) snapped to its current,
+already-diminished balance within the hour, clearing the halt and letting
+the live loop resume opening real trades — repeatedly, every hour, no matter
+how much has been lost cumulatively. This is a deliberate loosening of the
+circuit breaker, not a bug: max_drawdown_pct/max_daily_loss_pct are now
+per-CLOCK-HOUR checks, not true cumulative ones. A slow bleed spread across
+more than an hour, or several hours each individually under the threshold,
+no longer trips either breaker on its own.
 """
 
 from __future__ import annotations
@@ -102,6 +103,7 @@ class CapitalGuard:
     day_start_balance: float | None = None
     peak_balance: float | None = None
     current_day: date | None = None
+    current_hour: int | None = None  # epoch-hour bucket driving the hourly rebase, not current_day
     halted: bool = False
     halt_reason: str | None = None
 
@@ -134,6 +136,7 @@ class CapitalGuard:
             guard.peak_balance = data.get("peak_balance")
             cd = data.get("current_day")
             guard.current_day = date.fromisoformat(cd) if cd else None
+            guard.current_hour = data.get("current_hour")
             guard.halted = data.get("halted", False)
             guard.halt_reason = data.get("halt_reason")
             guard.week_start_balance = data.get("week_start_balance")
@@ -155,6 +158,7 @@ class CapitalGuard:
             "day_start_balance": self.day_start_balance,
             "peak_balance": self.peak_balance,
             "current_day": self.current_day.isoformat() if self.current_day else None,
+            "current_hour": self.current_hour,
             "halted": self.halted,
             "halt_reason": self.halt_reason,
             "week_start_balance": self.week_start_balance,
@@ -190,13 +194,14 @@ class CapitalGuard:
         if self.baseline_balance is None:
             self.baseline_balance = current_balance  # set once, ever — profit-lock's reference point
 
-        if self.current_day != today:
-            self.current_day = today
+        self.current_day = today  # bookkeeping only now — see current_hour below for the rebase
+        # Rebases day_start_balance AND peak_balance every clock hour — see
+        # the module docstring for why this is now hourly rather than
+        # trading-day, and the deliberate loosening that implies.
+        hour_bucket = int(now_ts // 3600)
+        if self.current_hour != hour_bucket:
+            self.current_hour = hour_bucket
             self.day_start_balance = current_balance
-            # Peak rebases here too — see the module docstring's note on why
-            # (a manual balance change, not a bot loss, must not leave a
-            # stale peak halting every future trading day on a drawdown the
-            # bot never caused).
             self.peak_balance = current_balance
         iso_year, iso_week, _ = today.isocalendar()
         week_key = f"{iso_year}-W{iso_week:02d}"
