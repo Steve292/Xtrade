@@ -95,6 +95,41 @@
   /* Any table that still can't fit scrolls on its own rather than forcing
      the whole page sideways. */
   .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
+  /* --- motion: sections settle in on load, live sections pulse a dot,
+     values flash briefly when a poll actually changes them. Respects
+     prefers-reduced-motion — this is a control panel, not a demo reel. */
+  @media (prefers-reduced-motion: no-preference) {
+    section { animation: rise .5s cubic-bezier(.16,1,.3,1) both; }
+    section:nth-of-type(1) { animation-delay: 0s; }
+    section:nth-of-type(2) { animation-delay: .04s; }
+    section:nth-of-type(3) { animation-delay: .08s; }
+    section:nth-of-type(4) { animation-delay: .12s; }
+    section:nth-of-type(5) { animation-delay: .16s; }
+    section:nth-of-type(6) { animation-delay: .2s; }
+    section:nth-of-type(7) { animation-delay: .24s; }
+    section:nth-of-type(8) { animation-delay: .28s; }
+  }
+  @keyframes rise {
+    from { opacity:0; transform:translateY(10px); }
+    to { opacity:1; transform:translateY(0); }
+  }
+  .live-dot { display:inline-block; width:7px; height:7px; border-radius:50%;
+    background:var(--up); margin-right:6px; position:relative; top:-1px;
+    box-shadow:0 0 0 0 rgba(29,185,128,.55); animation:live-pulse 2s ease-out infinite; }
+  @keyframes live-pulse {
+    0%   { box-shadow:0 0 0 0 rgba(29,185,128,.55); }
+    70%  { box-shadow:0 0 0 6px rgba(29,185,128,0); }
+    100% { box-shadow:0 0 0 0 rgba(29,185,128,0); }
+  }
+  @keyframes value-flash {
+    0%   { color:var(--acc); }
+    100% { color:inherit; }
+  }
+  .flash { animation:value-flash 900ms ease-out; }
+  .stat .v, td { transition:color .3s ease; }
+  button, .toggle .knob, .pill { transition:background-color .18s ease, color .18s ease, transform .1s ease; }
+  tr { transition:background-color .2s ease; }
 </style>
 </head>
 <body>
@@ -111,7 +146,7 @@
   <p class="sub">Seven-gate screened auto-trader on Hyperliquid — this panel reads/controls the live venue directly.</p>
 
   <section>
-    <h2>Account</h2>
+    <h2><span class="live-dot" title="Live — polled from the venue directly"></span>Account</h2>
     <div class="stat-row" id="statusStats">
       <div class="stat"><div class="l">Account value</div><div class="v" id="statAccountValue">—</div></div>
       <div class="stat"><div class="l">Withdrawable</div><div class="v" id="statWithdrawable">—</div></div>
@@ -123,7 +158,7 @@
 
   <section>
     <h2>
-      Market Regime
+      <span><span class="live-dot" title="Live — CoinGecko/Yahoo/CoinTelegraph, cached 15m"></span>Market Regime</span>
       <span class="sub" style="margin:0;font-weight:400;">informational only — not wired into sizing or entries yet</span>
     </h2>
     <div class="stat-row" id="regimeStats">
@@ -145,7 +180,7 @@
 
   <section>
     <h2>
-      Top by Market Cap
+      <span><span class="live-dot" title="Live — CoinGecko, cached 60s"></span>Top by Market Cap</span>
       <span class="sub" style="margin:0;font-weight:400;">CoinGecko leaderboard, same table as CoinMarketCap's homepage — display only, not the trading watchlist</span>
     </h2>
     <div class="table-scroll">
@@ -174,7 +209,7 @@
 
   <section>
     <h2>
-      MT5 Watchlist Signals
+      <span><span class="live-dot" title="Live — polled from the MT5 bridge directly"></span>MT5 Watchlist Signals</span>
       <span class="sub" style="margin:0;font-weight:400;">CVD/heatmap/SMC+Fib/session only — GEX, SSR, meme score, BTC.D have no forex/commodity equivalent</span>
     </h2>
     <div class="table-scroll">
@@ -307,6 +342,16 @@ function fmtNum(v, d) {
   return Number(v).toLocaleString(undefined, {maximumFractionDigits: d || 6});
 }
 
+function setVal(el, text) {
+  // Briefly flashes the value on an actual change — a poll that returns the
+  // same number shouldn't animate, only a real update should.
+  if (el.textContent === text) return;
+  el.textContent = text;
+  el.classList.remove('flash');
+  void el.offsetWidth; // restart the animation if it's still running from the last poll
+  el.classList.add('flash');
+}
+
 async function api(path, opts) {
   var res = await fetch(path, opts);
   var data = await res.json().catch(function(){ return {}; });
@@ -325,10 +370,10 @@ async function refreshStatus() {
     var toggle = document.getElementById('armedToggle');
     toggle.className = 'toggle' + (s.armed ? ' on' : '');
     toggle.setAttribute('aria-checked', s.armed ? 'true' : 'false');
-    document.getElementById('statAccountValue').textContent = fmtUsd(s.account_value);
-    document.getElementById('statWithdrawable').textContent = fmtUsd(s.withdrawable);
-    document.getElementById('statPositions').textContent = s.open_positions;
-    document.getElementById('statWatchlist').textContent = s.watchlist_size + ' coins';
+    setVal(document.getElementById('statAccountValue'), fmtUsd(s.account_value));
+    setVal(document.getElementById('statWithdrawable'), fmtUsd(s.withdrawable));
+    setVal(document.getElementById('statPositions'), String(s.open_positions));
+    setVal(document.getElementById('statWatchlist'), s.watchlist_size + ' coins');
     window._armed = s.armed;
     renderThreshold(s.min_confidence, s.config_min_confidence);
     renderAutoFire(s.auto_fire_pct);
@@ -354,7 +399,7 @@ async function refreshRegime() {
     var regimeEl = document.getElementById('regimeLabel');
     regimeEl.textContent = titleCase(d.regime.label);
     regimeEl.className = 'v ' + (d.regime.label.indexOf('RISK_ON') === 0 ? 'up' : d.regime.label === 'RISK_OFF' ? 'dn' : 'mut');
-    document.getElementById('regimeScore').textContent = Math.round(d.regime.score) + ' / 100';
+    setVal(document.getElementById('regimeScore'), Math.round(d.regime.score) + ' / 100');
 
     var hotEl = document.getElementById('hotnessSignal');
     hotEl.textContent = titleCase(d.hotness.signal);
