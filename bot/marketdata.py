@@ -179,6 +179,45 @@ def crypto_news_headlines(limit: int = 30, fetch=_default_fetch) -> list[dict] |
         return None
 
 
+def coingecko_top_by_market_cap(limit: int = 10, fetch=_default_fetch) -> list[dict] | None:
+    """Top `limit` coins ranked by market cap, via CoinGecko's public (no-key)
+    markets endpoint — the same leaderboard CoinMarketCap's homepage shows
+    (rank, price, 24h %, market cap, volume), for the dashboard's "Top by
+    Market Cap" widget. Purely informational: this feed is never consulted
+    by the watchlist or screening/entry logic (see config.yaml's fixed
+    majors/memecoins list for what the bot actually trades)."""
+    try:
+        resp = fetch(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            params={
+                "vs_currency": "usd",
+                "order": "market_cap_desc",
+                "per_page": limit,
+                "page": 1,
+                "price_change_percentage": "24h",
+            },
+            headers=_UA,
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+        rows = resp.json()
+        out = [
+            {
+                "rank": r.get("market_cap_rank"),
+                "symbol": (r.get("symbol") or "").upper(),
+                "name": r.get("name"),
+                "price": r.get("current_price"),
+                "change_24h_pct": r.get("price_change_percentage_24h"),
+                "market_cap": r.get("market_cap"),
+                "volume_24h": r.get("total_volume"),
+            }
+            for r in rows
+        ]
+        return out or None
+    except Exception:
+        return None
+
+
 def coingecko_top_movers_avg_7d_pct(category_id: str, top_n: int = 10, fetch=_default_fetch) -> float | None:
     """Average 7-day return of the top `top_n` coins (by market cap) in a
     CoinGecko category — the free source for "MEME.C Momentum" (avg 7D

@@ -18,6 +18,7 @@ from bot.marketdata import (
     coingecko_category_cap,
     coingecko_category_change_24h,
     coingecko_global,
+    coingecko_top_by_market_cap,
     coingecko_top_movers_avg_7d_pct,
     crypto_news_headlines,
     deribit_option_oi_by_strike,
@@ -152,6 +153,41 @@ def test_coingecko_top_movers_avg_7d_pct_skips_missing_values():
 def test_coingecko_top_movers_avg_7d_pct_returns_none_on_empty():
     fetch = lambda url, **kw: FakeResponse([])
     assert coingecko_top_movers_avg_7d_pct("meme-token", fetch=fetch) is None
+
+
+def test_coingecko_top_by_market_cap_shapes_rows():
+    payload = [
+        {
+            "market_cap_rank": 1, "symbol": "btc", "name": "Bitcoin",
+            "current_price": 65000.0, "price_change_percentage_24h": 2.5,
+            "market_cap": 1_280_000_000_000.0, "total_volume": 30_000_000_000.0,
+        },
+        {
+            "market_cap_rank": 2, "symbol": "eth", "name": "Ethereum",
+            "current_price": 3400.0, "price_change_percentage_24h": -1.1,
+            "market_cap": 410_000_000_000.0, "total_volume": 12_000_000_000.0,
+        },
+    ]
+    fetch = lambda url, **kw: FakeResponse(payload)
+    result = coingecko_top_by_market_cap(limit=2, fetch=fetch)
+    assert result == [
+        {"rank": 1, "symbol": "BTC", "name": "Bitcoin", "price": 65000.0,
+         "change_24h_pct": 2.5, "market_cap": 1_280_000_000_000.0, "volume_24h": 30_000_000_000.0},
+        {"rank": 2, "symbol": "ETH", "name": "Ethereum", "price": 3400.0,
+         "change_24h_pct": -1.1, "market_cap": 410_000_000_000.0, "volume_24h": 12_000_000_000.0},
+    ]
+
+
+def test_coingecko_top_by_market_cap_returns_none_on_empty():
+    fetch = lambda url, **kw: FakeResponse([])
+    assert coingecko_top_by_market_cap(fetch=fetch) is None
+
+
+def test_coingecko_top_by_market_cap_returns_none_on_network_exception():
+    def fetch(url, **kw):
+        raise ConnectionError("no network")
+
+    assert coingecko_top_by_market_cap(fetch=fetch) is None
 
 
 def test_deribit_option_oi_by_strike_sums_calls_and_puts():

@@ -145,6 +145,19 @@
 
   <section>
     <h2>
+      Top by Market Cap
+      <span class="sub" style="margin:0;font-weight:400;">CoinGecko leaderboard, same table as CoinMarketCap's homepage — display only, not the trading watchlist</span>
+    </h2>
+    <div class="table-scroll">
+    <table id="topMcapTable">
+      <thead><tr><th>#</th><th>Coin</th><th>Price</th><th>24h %</th><th>Market Cap</th><th>Volume (24h)</th></tr></thead>
+      <tbody id="topMcapBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>
       BTC Majors Checklist &amp; Suggested Sizing
       <span class="sub" style="margin:0;font-weight:400;">Section 5/6 — a second, independent classic-TA opinion; not the live entry logic</span>
     </h2>
@@ -714,6 +727,37 @@ async function cancelPending(id, symbol) {
   refreshPending();
 }
 
+function fmtCompactUsd(v) {
+  if (v === null || v === undefined) return '—';
+  var abs = Math.abs(v);
+  var suffix = abs >= 1e12 ? ['T', 1e12] : abs >= 1e9 ? ['B', 1e9] : abs >= 1e6 ? ['M', 1e6] : abs >= 1e3 ? ['K', 1e3] : ['', 1];
+  return (v < 0 ? '-$' : '$') + (abs / suffix[1]).toFixed(2) + suffix[0];
+}
+
+async function refreshTopMarketCap() {
+  try {
+    var d = await api('/api/top-market-cap');
+    var body = document.getElementById('topMcapBody');
+    body.innerHTML = '';
+    (d.rows || []).forEach(function(r) {
+      var tr = document.createElement('tr');
+      var chg = r.change_24h_pct;
+      var chgCls = chg > 0 ? 'up' : chg < 0 ? 'dn' : 'mut';
+      tr.innerHTML =
+        '<td class="mut">' + (r.rank ?? '—') + '</td>' +
+        '<td><b>' + r.symbol + '</b> <span class="mut">' + r.name + '</span></td>' +
+        '<td>' + fmtUsd(r.price) + '</td>' +
+        '<td class="' + chgCls + '">' + (chg === null || chg === undefined ? '—' : (chg > 0 ? '+' : '') + chg.toFixed(2) + '%') + '</td>' +
+        '<td>' + fmtCompactUsd(r.market_cap) + '</td>' +
+        '<td>' + fmtCompactUsd(r.volume_24h) + '</td>';
+      body.appendChild(tr);
+    });
+    if (!(d.rows || []).length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">No data.</td></tr>';
+    }
+  } catch (e) { toast('top market cap: ' + e.message, true); }
+}
+
 document.querySelectorAll('.thr-btn').forEach(function(b) {
   b.addEventListener('click', function() { setThreshold(parseFloat(b.getAttribute('data-thr'))); });
 });
@@ -725,10 +769,12 @@ refreshStatus();
 refreshPositions();
 refreshRegime();
 refreshPending();
+refreshTopMarketCap();
 setInterval(refreshStatus, 15000);
 setInterval(refreshPositions, 15000);
 setInterval(refreshRegime, 60000);  // server caches the underlying fetch for 15m regardless
 setInterval(refreshPending, 10000); // faster: these expire, and the countdown should look live
+setInterval(refreshTopMarketCap, 60000); // matches TOP_MCAP_CACHE_SECONDS server-side
 </script>
 </body>
 </html>

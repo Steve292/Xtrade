@@ -40,6 +40,7 @@ from bot.combined_ledger import fetch_combined_balance
 from bot.hyperliquid.client import HyperliquidClient
 from bot.hyperliquid.trader import HyperliquidTrader
 from bot.market_snapshot import compute_snapshot
+from bot.marketdata import coingecko_top_by_market_cap
 from bot.mt5.client import MT5Client
 from bot import pending_trades
 from bot.position_sizing import risk_pct_for_fixed_usd, staged_fixed_risk_usd
@@ -66,6 +67,12 @@ _news_cache: dict = {"items": [], "fetched_at": 0.0}
 # regardless of how often the dashboard itself polls this endpoint.
 REGIME_CACHE_SECONDS = 900
 _regime_cache: dict = {"data": None, "fetched_at": 0.0}
+
+# CoinGecko's free tier is rate-limited (roughly 10-30 calls/min, shared
+# across every free caller worldwide) — a 60s server-side cache keeps any
+# number of open dashboard tabs to one upstream call/minute between them.
+TOP_MCAP_CACHE_SECONDS = 60
+_top_mcap_cache: dict = {"rows": [], "fetched_at": 0.0}
 
 app = Flask(__name__, static_folder=None)
 
@@ -343,6 +350,26 @@ def api_regime():
                 return jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), 503
             app.logger.warning("regime refresh failed, serving stale cache: %s", e)
     return jsonify(_regime_cache["data"])
+
+
+@app.get("/api/top-market-cap")
+def api_top_market_cap():
+    """Read-only top-20-by-market-cap leaderboard (rank, price, 24h %,
+    market cap, volume) via CoinGecko — the same table CoinMarketCap's
+    homepage shows. Purely a dashboard display: this feed never touches the
+    watchlist or screening/entry logic, which stays config.yaml's fixed
+    majors/memecoins list."""
+    now = time.time()
+    if not _top_mcap_cache["rows"] or now - _top_mcap_cache["fetched_at"] > TOP_MCAP_CACHE_SECONDS:
+        rows = coingecko_top_by_market_cap(limit=20)
+        if rows:
+            _top_mcap_cache["rows"] = rows
+            _top_mcap_cache["fetched_at"] = now
+        elif not _top_mcap_cache["rows"]:
+            return jsonify({"error": "CoinGecko fetch failed", "rows": []}), 503
+        else:
+            app.logger.warning("top-market-cap refresh failed, serving stale cache")
+    return jsonify({"rows": _top_mcap_cache["rows"], "fetched_at": _top_mcap_cache["fetched_at"]})
 
 
 @app.get("/api/status")
