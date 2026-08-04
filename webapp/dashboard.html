@@ -128,8 +128,19 @@
   }
   .flash { animation:value-flash 900ms ease-out; }
   .stat .v, td { transition:color .3s ease; }
-  button, .toggle .knob, .pill { transition:background-color .18s ease, color .18s ease, transform .1s ease; }
+  button, .toggle .knob, .pill, .badge { transition:background-color .18s ease, color .18s ease, border-color .18s ease, transform .1s ease; }
   tr { transition:background-color .2s ease; }
+  /* Every scan/positions/signals/mcap tbody and every pending card is fully
+     torn down and rebuilt on each poll — animating them unconditionally
+     (rather than diffing) is what makes each refresh read as a live update
+     instead of a jump-cut, with zero extra JS bookkeeping per call site. */
+  @media (prefers-reduced-motion: no-preference) {
+    tbody tr, .pend-card { animation:row-in .35s cubic-bezier(.16,1,.3,1) both; }
+  }
+  @keyframes row-in {
+    from { opacity:0; transform:translateY(4px); }
+    to   { opacity:1; transform:translateY(0); }
+  }
 </style>
 </head>
 <body>
