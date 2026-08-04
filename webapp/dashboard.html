@@ -204,6 +204,34 @@
 
   <section>
     <h2>
+      <span><span class="live-dot" title="Live — Binance, cached 30s"></span>Watchlist</span>
+      <span class="sub" style="margin:0;font-weight:400;">exactly the coins this bot trades (config.yaml majors + memecoins) — click a row for its live chart</span>
+    </h2>
+    <div class="table-scroll">
+    <table id="watchlistTable">
+      <thead><tr><th>Coin</th><th>Price</th><th>24h %</th><th>High</th><th>Low</th><th>Volume (24h)</th></tr></thead>
+      <tbody id="watchlistBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section id="coinDetailSection" style="display:none;">
+    <h2>
+      <span><span class="live-dot" title="Live"></span><span id="coinDetailTitle">Coin detail</span></span>
+      <button class="ghost" onclick="closeCoinDetail()" style="padding:6px 12px;font-size:12px;">Close</button>
+    </h2>
+    <div class="stat-row" id="coinDetailStats">
+      <div class="stat"><div class="l">Price</div><div class="v" id="coinDetailPrice">—</div></div>
+      <div class="stat"><div class="l">Change (window)</div><div class="v" id="coinDetailChange">—</div></div>
+      <div class="stat"><div class="l">High</div><div class="v" id="coinDetailHigh">—</div></div>
+      <div class="stat"><div class="l">Low</div><div class="v" id="coinDetailLow">—</div></div>
+    </div>
+    <div id="coinDetailChart" style="margin-top:12px;"></div>
+    <p class="empty" id="coinDetailEmpty" style="display:none;">No chart data available.</p>
+  </section>
+
+  <section>
+    <h2>
       BTC Majors Checklist &amp; Suggested Sizing
       <span class="sub" style="margin:0;font-weight:400;">Section 5/6 — a second, independent classic-TA opinion; not the live entry logic</span>
     </h2>
@@ -510,6 +538,9 @@ function renderMt5Signals(rows) {
       '<td>' + moduleCell(sm.modules.smc_fib) + '</td>' +
       '<td>' + moduleCell(sm.modules.session) + '</td>' +
       '<td>' + sizingHtml + '</td>';
+    tr.style.cursor = 'pointer';
+    tr.title = 'Click for ' + r.symbol + '\'s live chart';
+    tr.onclick = function() { openCoinDetail(r.symbol, 'mt5'); };
     body.appendChild(tr);
   });
 }
@@ -814,6 +845,93 @@ async function refreshTopMarketCap() {
   } catch (e) { toast('top market cap: ' + e.message, true); }
 }
 
+async function refreshWatchlist() {
+  try {
+    var d = await api('/api/watchlist');
+    var body = document.getElementById('watchlistBody');
+    body.innerHTML = '';
+    (d.rows || []).forEach(function(r) {
+      var tr = document.createElement('tr');
+      if (!r.available) {
+        tr.innerHTML = '<td><b>' + r.coin + '</b></td><td colspan="5" class="mut">not listed on Binance</td>';
+        body.appendChild(tr);
+        return;
+      }
+      var chg = r.change_24h_pct;
+      var chgCls = chg > 0 ? 'up' : chg < 0 ? 'dn' : 'mut';
+      tr.innerHTML =
+        '<td><b>' + r.coin + '</b></td>' +
+        '<td>' + fmtUsd(r.price) + '</td>' +
+        '<td class="' + chgCls + '">' + (chg === null || chg === undefined ? '—' : (chg > 0 ? '+' : '') + chg.toFixed(2) + '%') + '</td>' +
+        '<td>' + fmtUsd(r.high_24h) + '</td>' +
+        '<td>' + fmtUsd(r.low_24h) + '</td>' +
+        '<td>' + fmtCompactUsd(r.volume_24h) + '</td>';
+      tr.style.cursor = 'pointer';
+      tr.title = 'Click for ' + r.coin + '\'s live chart';
+      tr.onclick = function() { openCoinDetail(r.coin, 'crypto'); };
+      body.appendChild(tr);
+    });
+    if (!(d.rows || []).length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">No data.</td></tr>';
+    }
+  } catch (e) { toast('watchlist: ' + e.message, true); }
+}
+
+function buildSparklineSvg(candles) {
+  if (!candles || candles.length < 2) return '';
+  var closes = candles.map(function(c) { return c.close; });
+  var min = Math.min.apply(null, closes), max = Math.max.apply(null, closes);
+  var range = (max - min) || 1;
+  var w = 100, h = 100; // viewBox units, scales via CSS width
+  var pts = closes.map(function(c, i) {
+    var x = (i / (closes.length - 1)) * w;
+    var y = h - ((c - min) / range) * h;
+    return x.toFixed(2) + ',' + y.toFixed(2);
+  }).join(' ');
+  var up = closes[closes.length - 1] >= closes[0];
+  var color = up ? 'var(--up)' : 'var(--dn)';
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" ' +
+    'style="width:100%;height:160px;display:block;">' +
+    '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.5" ' +
+    'vector-effect="non-scaling-stroke"/></svg>';
+}
+
+async function openCoinDetail(symbol, venue) {
+  var section = document.getElementById('coinDetailSection');
+  section.style.display = '';
+  document.getElementById('coinDetailTitle').textContent = symbol + ' — loading…';
+  section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  try {
+    var d = await api('/api/coin-chart?symbol=' + encodeURIComponent(symbol) + '&venue=' + venue);
+    document.getElementById('coinDetailTitle').textContent = symbol + ' (' + (venue === 'mt5' ? 'MT5' : 'Binance') + ')';
+    document.getElementById('coinDetailPrice').textContent = fmtUsd(d.last);
+    var chg = d.change_pct;
+    var chgEl = document.getElementById('coinDetailChange');
+    chgEl.textContent = (chg === null || chg === undefined ? '—' : (chg > 0 ? '+' : '') + chg.toFixed(2) + '%');
+    chgEl.className = 'v ' + (chg > 0 ? 'up' : chg < 0 ? 'dn' : 'mut');
+    document.getElementById('coinDetailHigh').textContent = fmtUsd(d.high);
+    document.getElementById('coinDetailLow').textContent = fmtUsd(d.low);
+    var chartEl = document.getElementById('coinDetailChart');
+    var emptyEl = document.getElementById('coinDetailEmpty');
+    var svg = buildSparklineSvg(d.candles);
+    if (svg) {
+      chartEl.innerHTML = svg;
+      chartEl.style.display = '';
+      emptyEl.style.display = 'none';
+    } else {
+      chartEl.style.display = 'none';
+      emptyEl.style.display = '';
+    }
+  } catch (e) {
+    document.getElementById('coinDetailTitle').textContent = symbol + ' — failed to load';
+    toast('chart: ' + e.message, true);
+  }
+}
+
+function closeCoinDetail() {
+  document.getElementById('coinDetailSection').style.display = 'none';
+}
+
 document.querySelectorAll('.thr-btn').forEach(function(b) {
   b.addEventListener('click', function() { setThreshold(parseFloat(b.getAttribute('data-thr'))); });
 });
@@ -826,11 +944,13 @@ refreshPositions();
 refreshRegime();
 refreshPending();
 refreshTopMarketCap();
+refreshWatchlist();
 setInterval(refreshStatus, 15000);
 setInterval(refreshPositions, 15000);
 setInterval(refreshRegime, 60000);  // server caches the underlying fetch for 15m regardless
 setInterval(refreshPending, 10000); // faster: these expire, and the countdown should look live
 setInterval(refreshTopMarketCap, 60000); // matches TOP_MCAP_CACHE_SECONDS server-side
+setInterval(refreshWatchlist, 30000); // matches WATCHLIST_CACHE_SECONDS server-side
 </script>
 </body>
 </html>

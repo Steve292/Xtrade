@@ -39,6 +39,7 @@ from bot.capital_guard import CapitalGuard
 from bot.combined_ledger import fetch_combined_balance
 from bot.hyperliquid.client import HyperliquidClient
 from bot.hyperliquid.trader import HyperliquidTrader
+from bot.exchange import Exchange
 from bot.market_snapshot import compute_snapshot
 from bot.marketdata import coingecko_top_by_market_cap
 from bot.mt5.client import MT5Client
@@ -73,6 +74,22 @@ _regime_cache: dict = {"data": None, "fetched_at": 0.0}
 # number of open dashboard tabs to one upstream call/minute between them.
 TOP_MCAP_CACHE_SECONDS = 60
 _top_mcap_cache: dict = {"rows": [], "fetched_at": 0.0}
+
+
+def _binance_symbol(coin: str) -> str:
+    """Hyperliquid coin name -> Binance spot symbol. Hyperliquid k-prefixes
+    1000x-denominated tokens ("kPEPE", "kBONK", "kSHIB" -- see config.yaml's
+    memecoins comment); Binance lists the plain token, so the prefix is
+    stripped before appending /USDT."""
+    base = coin[1:] if coin.startswith("k") and len(coin) > 1 and coin[1].isupper() else coin
+    return f"{base}/USDT"
+
+
+# One batch ccxt fetch_tickers() call regardless of watchlist size, so the
+# rate-limit cost of caching this is trivial either way -- cached anyway so
+# repeat polls (any number of open tabs) don't re-hit Binance every 15s.
+WATCHLIST_CACHE_SECONDS = 30
+_watchlist_cache: dict = {"rows": [], "fetched_at": 0.0}
 
 app = Flask(__name__, static_folder=None)
 
@@ -370,6 +387,93 @@ def api_top_market_cap():
         else:
             app.logger.warning("top-market-cap refresh failed, serving stale cache")
     return jsonify({"rows": _top_mcap_cache["rows"], "fetched_at": _top_mcap_cache["fetched_at"]})
+
+
+@app.get("/api/watchlist")
+def api_watchlist():
+    """Read-only live snapshot of the coins actually on the trading
+    watchlist (config.yaml majors+memecoins), sourced from Binance --
+    distinct from /api/top-market-cap's CoinGecko top-20-by-market-cap,
+    which includes coins this bot never trades. A coin with no Binance spot
+    listing (e.g. HYPE, Hyperliquid's own token) is reported with
+    available=False rather than silently dropped."""
+    now = time.time()
+    if not _watchlist_cache["rows"] or now - _watchlist_cache["fetched_at"] > WATCHLIST_CACHE_SECONDS:
+        try:
+            symbols = [_binance_symbol(c) for c in WATCHLIST]
+            # No explicit `symbols` filter: ccxt's binance.fetch_tickers raises
+            # BadSymbol if ANY requested symbol isn't a real Binance market
+            # (e.g. HYPE/USDT, Hyperliquid's own token) rather than omitting
+            # it -- fetching everything and looking up by key sidesteps that
+            # entirely and is still exactly one HTTP call either way.
+            tickers = Exchange(exchange_id="binance", mode="paper").client.fetch_tickers()
+            rows = []
+            for coin, symbol in zip(WATCHLIST, symbols):
+                t = tickers.get(symbol)
+                if t is None:
+                    rows.append({"coin": coin, "symbol": symbol, "available": False})
+                    continue
+                rows.append({
+                    "coin": coin, "symbol": symbol, "available": True,
+                    "price": t.get("last"), "change_24h_pct": t.get("percentage"),
+                    "high_24h": t.get("high"), "low_24h": t.get("low"),
+                    "volume_24h": t.get("quoteVolume"),
+                })
+            _watchlist_cache["rows"] = rows
+            _watchlist_cache["fetched_at"] = now
+        except Exception as e:
+            if not _watchlist_cache["rows"]:
+                return jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}", "rows": []}), 503
+            app.logger.warning("watchlist refresh failed, serving stale cache: %s", e)
+    return jsonify({"rows": _watchlist_cache["rows"], "fetched_at": _watchlist_cache["fetched_at"]})
+
+
+@app.get("/api/coin-chart")
+def api_coin_chart():
+    """Read-only recent candles + windowed stats for ONE coin, for the
+    dashboard's click-a-watchlist-row detail panel. venue=crypto sources
+    Binance (same coin mapping as /api/watchlist); venue=mt5 sources the
+    MT5 bridge directly -- forex/commodities aren't listed on Binance, so
+    that IS the live venue here, not a fallback source.
+
+    change/high/low are computed over the returned candle window, not a
+    strict trailing-24h clock -- same documented approximation _symbol_ticker
+    already makes for the MT5 signals table."""
+    symbol = request.args.get("symbol", "")
+    venue = request.args.get("venue", "crypto")
+    if not symbol:
+        return jsonify({"error": "symbol required"}), 400
+    try:
+        if venue == "mt5":
+            mt5 = _mt5_client()
+            ltf = CFG.get("mt5_timeframe", CFG.get("timeframe", "15m"))
+            df = mt5.copy_rates(symbol, ltf, count=100)
+            bid, ask = mt5.tick(symbol)
+            last = (bid + ask) / 2
+        else:
+            df = Exchange(exchange_id="binance", mode="paper").fetch_ohlcv(
+                _binance_symbol(symbol), CFG.get("timeframe", "15m"), limit=100
+            )
+            last = float(df.iloc[-1]["close"]) if len(df) else None
+
+        candles = [
+            {"time": int(row["timestamp"].timestamp() * 1000), "close": float(row["close"])}
+            for _, row in df.iterrows()
+        ]
+        change_pct = high = low = None
+        if len(df) > 1:
+            closes = df["close"].astype(float)
+            high = float(df["high"].astype(float).max())
+            low = float(df["low"].astype(float).min())
+            first = float(closes.iloc[0])
+            if first:
+                change_pct = (float(closes.iloc[-1]) - first) / first * 100
+        return jsonify({
+            "symbol": symbol, "venue": venue, "candles": candles,
+            "last": last, "change_pct": change_pct, "high": high, "low": low,
+        })
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {str(e)[:200]}"}), 503
 
 
 @app.get("/api/status")
