@@ -23,8 +23,12 @@ import xml.etree.ElementTree as ET
 
 import requests
 
+from bot.exchange import Exchange
+
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; TraderX/1.0)"}
 _TIMEOUT = 10
+
+_BINANCE_INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
 
 
 def _default_fetch(url: str, **kwargs):
@@ -246,5 +250,58 @@ def coingecko_top_movers_avg_7d_pct(category_id: str, top_n: int = 10, fetch=_de
         if not returns:
             return None
         return sum(returns) / len(returns)
+    except Exception:
+        return None
+
+
+def binance_symbol(coin: str) -> str:
+    """Hyperliquid coin name -> Binance spot symbol. Hyperliquid k-prefixes
+    1000x-denominated tokens ("kPEPE", "kBONK", "kSHIB" -- see config.yaml's
+    memecoins comment); Binance lists the plain token, so the prefix is
+    stripped before appending /USDT."""
+    base = coin[1:] if coin.startswith("k") and len(coin) > 1 and coin[1].isupper() else coin
+    return f"{base}/USDT"
+
+
+def _default_binance_exchange() -> Exchange:
+    return Exchange(exchange_id="binance", mode="paper")
+
+
+def binance_candles(
+    interval: str, lookback_hours: int, symbol: str = "BTC/USDT", exchange_factory=_default_binance_exchange
+):
+    """OHLCV candles from Binance via ccxt (bot/exchange.py, already used by
+    backtest.py/scan.py) -- same DataFrame shape (timestamp/open/high/low/
+    close/volume) as HyperliquidClient.candles() and MT5Client.copy_rates(),
+    so this is a drop-in substitute wherever either of those is used.
+    `exchange_factory` is injectable so tests never hit the real network."""
+    minutes = _BINANCE_INTERVAL_MINUTES.get(interval, 15)
+    limit = min(1000, max(2, int(lookback_hours * 60 / minutes) + 1))
+    return exchange_factory().fetch_ohlcv(symbol, interval, limit=limit)
+
+
+def candles_with_binance_fallback(
+    venue_client, coin: str, interval: str, lookback_hours: int, exchange_factory=_default_binance_exchange
+):
+    """`venue_client.candles(coin, interval=interval, lookback_hours=lookback_hours)`,
+    falling back to Binance on any failure (rate limit, connection reset,
+    `venue_client` itself being None). BTC/ETH/majors trade at near-identical
+    prices across venues, so Binance is a legitimate stand-in specifically
+    for a coin's own price-derived technical checks -- never a substitute
+    for anything venue-specific (positions, funding rate, order book, actual
+    fill price), which is why callers only use this for candles feeding
+    signal generation, not execution itself.
+
+    `venue_client` must expose `.candles(coin, interval=..., lookback_hours=...)`
+    (HyperliquidClient's signature) -- callers with a different-shaped client
+    (e.g. MT5Client.copy_rates) should call binance_candles() directly instead,
+    since there's no real Binance equivalent for forex/commodity symbols anyway."""
+    if venue_client is not None:
+        try:
+            return venue_client.candles(coin, interval=interval, lookback_hours=lookback_hours)
+        except Exception:
+            pass
+    try:
+        return binance_candles(interval, lookback_hours, symbol=f"{coin}/USDT", exchange_factory=exchange_factory)
     except Exception:
         return None

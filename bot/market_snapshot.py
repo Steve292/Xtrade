@@ -28,13 +28,11 @@ from bot import position_sizing
 from bot import regime as regime_mod
 from bot import smart_money
 from bot import timeseries
-from bot.exchange import Exchange
 from bot.hyperliquid.client import HyperliquidClient
+from bot.marketdata import candles_with_binance_fallback
 from bot.mt5.client import MT5Client
 from bot.smc.strategy import SMCStrategy
 from bot.wallet import DefiWallet
-
-_BINANCE_INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1d": 1440}
 
 ROOT = Path(__file__).resolve().parents[1]
 DOMINANCE_STATE_PATH = ROOT / "dominance_history.json"
@@ -74,44 +72,6 @@ def _hl_client(cfg: dict) -> HyperliquidClient:
         private_key=wallet.private_key if wallet else "",
         testnet=hl_cfg.get("testnet", True),
     )
-
-
-def _default_binance_exchange() -> Exchange:
-    return Exchange(exchange_id="binance", mode="paper")
-
-
-def _binance_candles(
-    interval: str, lookback_hours: int, symbol: str = "BTC/USDT", exchange_factory=_default_binance_exchange
-):
-    """Fallback for HyperliquidClient.candles() -- same DataFrame shape
-    (timestamp/open/high/low/close/volume), sourced from Binance via ccxt
-    (bot/exchange.py, already used by backtest.py) instead of Hyperliquid.
-    Only reached when the Hyperliquid fetch itself fails (rate limit /
-    connection reset), so a venue-side blip doesn't blank out an indicator
-    real price data could still answer. `exchange_factory` is injectable so
-    tests never hit the real network."""
-    minutes = _BINANCE_INTERVAL_MINUTES.get(interval, 15)
-    limit = min(1000, max(2, int(lookback_hours * 60 / minutes) + 1))
-    return exchange_factory().fetch_ohlcv(symbol, interval, limit=limit)
-
-
-def _candles_with_fallback(
-    hl_client, coin: str, interval: str, lookback_hours: int, exchange_factory=_default_binance_exchange
-):
-    """hl_client.candles(), falling back to Binance on any failure. BTC/ETH
-    trade at near-identical prices across venues, so Binance is a legitimate
-    stand-in specifically for a coin's own price-derived technical checks --
-    not a substitute for anything venue-specific (positions, funding rate,
-    order book), which is why callers below only use this for candles."""
-    if hl_client is not None:
-        try:
-            return hl_client.candles(coin, interval=interval, lookback_hours=lookback_hours)
-        except Exception:
-            pass
-    try:
-        return _binance_candles(interval, lookback_hours, symbol=f"{coin}/USDT", exchange_factory=exchange_factory)
-    except Exception:
-        return None
 
 
 def _mt5_client() -> MT5Client:
@@ -228,16 +188,17 @@ def compute_snapshot(cfg: dict | None = None) -> dict:
         pass
 
     # Each candle set is fetched independently, each with its own Binance
-    # fallback (see _candles_with_fallback) -- a rate-limit/connection blip
-    # on Hyperliquid for ONE of these must not blank out the other three
-    # too, which the previous single try/except around this whole block did.
-    btc_candles = _candles_with_fallback(hl_client, "BTC", cfg.get("timeframe", "15m"), 48)
-    htf_candles = _candles_with_fallback(hl_client, "BTC", cfg.get("higher_timeframe", "1h"), 200)
+    # fallback (see bot.marketdata.candles_with_binance_fallback) -- a
+    # rate-limit/connection blip on Hyperliquid for ONE of these must not
+    # blank out the other three too, which the previous single try/except
+    # around this whole block did.
+    btc_candles = candles_with_binance_fallback(hl_client, "BTC", cfg.get("timeframe", "15m"), 48)
+    htf_candles = candles_with_binance_fallback(hl_client, "BTC", cfg.get("higher_timeframe", "1h"), 200)
     # Separate from btc_candles/htf_candles above (15m/1h, tuned for the live
     # SMC screener) — Section 5's majors rule specifically wants Daily + 4H
     # confirmation, so it gets its own fetch.
-    daily_candles = _candles_with_fallback(hl_client, "BTC", "1d", 24 * 220)
-    four_h_candles = _candles_with_fallback(hl_client, "BTC", "4h", 24 * 20)
+    daily_candles = candles_with_binance_fallback(hl_client, "BTC", "1d", 24 * 220)
+    four_h_candles = candles_with_binance_fallback(hl_client, "BTC", "4h", 24 * 20)
 
     if btc_candles is not None and htf_candles is not None:
         try:

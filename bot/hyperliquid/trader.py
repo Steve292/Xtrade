@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from bot import live_state, pending_trades
 from bot.capital_guard import CapitalGuard, OpenRisk, trading_day
+from bot.marketdata import candles_with_binance_fallback
 from bot.screening import ScreenResult, TradeScreener
 from bot.smc.strategy import Signal, SignalType, SMCStrategy
 from bot.unified_screen import evaluate_unified
@@ -222,9 +223,21 @@ class HyperliquidTrader:
         trading. The unified gate (bot/unified_screen.py) requires BOTH the
         seven-gate structure screen AND the smart-money read (defaults to
         NEUTRAL, which never blocks, when the caller doesn't supply one) —
-        only a unified-approved signal gets sized into a plan."""
-        df = self.client.candles(coin, ltf, lookback_hours=72)
-        htf_df = self.client.candles(coin, htf, lookback_hours=240)
+        only a unified-approved signal gets sized into a plan.
+
+        Candles fall back to Binance (bot/marketdata.py) if Hyperliquid's own
+        fetch fails (rate limit / connection reset) -- Hyperliquid stays the
+        primary source (it's the actual execution venue), Binance only fills
+        in a scan pass that would otherwise silently error out for this coin.
+        If BOTH sources fail this raises, same as the plain
+        self.client.candles() call used to -- callers (evaluate_many's
+        per-coin try/except, run_once) already handle that failure mode, so
+        it must stay a raise here rather than quietly returning a placeholder
+        signal that would trip `unified.approved` on a None."""
+        df = candles_with_binance_fallback(self.client, coin, ltf, 72)
+        htf_df = candles_with_binance_fallback(self.client, coin, htf, 240)
+        if df is None or htf_df is None:
+            raise RuntimeError(f"no candles for {coin} (Hyperliquid and Binance both unavailable)")
         signal = self.strategy.analyze(df, htf_df)
         result = self.screener.screen(signal, df, htf_df)
         unified = evaluate_unified(

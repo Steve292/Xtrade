@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Walk-forward optimizer for the live SMC strategy's parameters — blueprint
-Section 8. Fetches real historical BTC candles from Hyperliquid, runs
+Section 8. Fetches real historical BTC candles from Binance (bot/exchange.py,
+same source backtest.py/scan.py already default to), runs
 bot/backtest/optimizer.py's optimize -> select -> forward-validate cycle
 once, and PRINTS a report. It never writes to config.yaml or anywhere
 else — if the report says DEPLOY and you agree, you update config.yaml's
@@ -32,11 +33,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import yaml
-from dotenv import load_dotenv
 
 from bot.backtest.optimizer import format_walk_forward_report, run_walk_forward
-from bot.hyperliquid.client import HyperliquidClient
-from bot.wallet import DefiWallet
+from bot.marketdata import binance_candles, binance_symbol
 
 _SMC_PARAM_KEYS = (
     "swing_lookback",
@@ -49,7 +48,7 @@ _SMC_PARAM_KEYS = (
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--coin", default="BTC", help="Hyperliquid coin to optimize against (default: BTC)")
+    parser.add_argument("--coin", default="BTC", help="coin to optimize against, Hyperliquid naming incl. k-prefix (default: BTC)")
     parser.add_argument("--timeframe", default="1h", help="candle interval (default: 1h — see performance note above)")
     parser.add_argument("--htf", default="4h", help="higher timeframe for trend context (default: 4h)")
     parser.add_argument("--optimize-days", type=float, default=14, help="optimize-window length in days (default: 14)")
@@ -58,20 +57,15 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None, help="rng seed, for a reproducible epsilon-greedy draw")
     args = parser.parse_args()
 
-    load_dotenv()
     with open(Path(__file__).resolve().parents[1] / "config.yaml") as f:
         cfg = yaml.safe_load(f) or {}
     current_params = {k: cfg[k] for k in _SMC_PARAM_KEYS if k in cfg}
 
     lookback_hours = int((args.optimize_days + args.test_days + 2) * 24)  # +2 days margin
-    print(f"Fetching {lookback_hours}h of {args.timeframe} {args.coin} candles from Hyperliquid...")
+    symbol = binance_symbol(args.coin)
+    print(f"Fetching {lookback_hours}h of {args.timeframe} {symbol} candles from Binance...")
 
-    hl_cfg = cfg.get("hyperliquid", {})
-    wallet = DefiWallet.from_env() or DefiWallet.load()
-    client = HyperliquidClient.connect(
-        private_key=wallet.private_key if wallet else "", testnet=hl_cfg.get("testnet", True)
-    )
-    df = client.candles(args.coin, interval=args.timeframe, lookback_hours=lookback_hours)
+    df = binance_candles(args.timeframe, lookback_hours, symbol=symbol)
     print(f"Got {len(df)} bars ({df['timestamp'].min()} -> {df['timestamp'].max()})\n")
 
     rng = random.Random(args.seed) if args.seed is not None else None

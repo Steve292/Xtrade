@@ -14,7 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pandas as pd
+
 from bot.marketdata import (
+    binance_candles,
+    candles_with_binance_fallback,
     coingecko_category_cap,
     coingecko_category_change_24h,
     coingecko_global,
@@ -251,6 +255,96 @@ def test_crypto_news_headlines_returns_none_on_error():
         raise ConnectionError("down")
 
     assert crypto_news_headlines(fetch=fetch) is None
+
+
+# ---- binance_candles / candles_with_binance_fallback -----------------------
+# No network: every test injects a fake exchange_factory / venue_client
+# rather than hitting Binance or a real venue.
+
+def _candle_df(n: int = 3) -> pd.DataFrame:
+    return pd.DataFrame({
+        "timestamp": pd.date_range("2026-01-01", periods=n, freq="15min"),
+        "open": [1.0] * n, "high": [1.0] * n, "low": [1.0] * n, "close": [1.0] * n, "volume": [1.0] * n,
+    })
+
+
+class FakeExchange:
+    def __init__(self, df=None, raise_exc=None):
+        self._df = df if df is not None else _candle_df()
+        self._raise = raise_exc
+        self.calls = []
+
+    def fetch_ohlcv(self, symbol, timeframe, limit=200):
+        self.calls.append((symbol, timeframe, limit))
+        if self._raise:
+            raise self._raise
+        return self._df
+
+
+class FakeVenueClient:
+    def __init__(self, df=None, raise_exc=None):
+        self._df = df
+        self._raise = raise_exc
+        self.calls = []
+
+    def candles(self, coin, interval, lookback_hours):
+        self.calls.append((coin, interval, lookback_hours))
+        if self._raise:
+            raise self._raise
+        return self._df
+
+
+def test_binance_candles_computes_limit_from_lookback_and_interval():
+    fake = FakeExchange()
+    binance_candles("15m", lookback_hours=48, symbol="BTC/USDT", exchange_factory=lambda: fake)
+    assert fake.calls == [("BTC/USDT", "15m", 193)]  # 48*60/15 + 1
+
+
+def test_binance_candles_caps_limit_at_1000():
+    fake = FakeExchange()
+    binance_candles("1m", lookback_hours=24 * 220, symbol="BTC/USDT", exchange_factory=lambda: fake)
+    assert fake.calls[0][2] == 1000
+
+
+def test_binance_candles_returns_same_shape_as_other_venues():
+    df = _candle_df(5)
+    fake = FakeExchange(df=df)
+    result = binance_candles("15m", 48, exchange_factory=lambda: fake)
+    assert list(result.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
+    assert len(result) == 5
+
+
+def test_candles_with_binance_fallback_prefers_venue_client_when_it_succeeds():
+    venue_df = _candle_df(2)
+    venue_client = FakeVenueClient(df=venue_df)
+    fake_exchange = FakeExchange()
+    result = candles_with_binance_fallback(venue_client, "BTC", "15m", 48, exchange_factory=lambda: fake_exchange)
+    assert result is venue_df
+    assert fake_exchange.calls == []  # never touched Binance
+
+
+def test_candles_with_binance_fallback_uses_binance_when_venue_client_raises():
+    venue_client = FakeVenueClient(raise_exc=RuntimeError("no candles"))
+    binance_df = _candle_df(4)
+    fake_exchange = FakeExchange(df=binance_df)
+    result = candles_with_binance_fallback(venue_client, "BTC", "15m", 48, exchange_factory=lambda: fake_exchange)
+    assert result is binance_df
+    assert fake_exchange.calls[0][0] == "BTC/USDT"
+
+
+def test_candles_with_binance_fallback_uses_binance_when_venue_client_is_none():
+    binance_df = _candle_df(1)
+    fake_exchange = FakeExchange(df=binance_df)
+    result = candles_with_binance_fallback(None, "ETH", "1h", 200, exchange_factory=lambda: fake_exchange)
+    assert result is binance_df
+    assert fake_exchange.calls[0][0] == "ETH/USDT"
+
+
+def test_candles_with_binance_fallback_returns_none_when_both_fail():
+    venue_client = FakeVenueClient(raise_exc=RuntimeError("down"))
+    fake_exchange = FakeExchange(raise_exc=RuntimeError("also down"))
+    result = candles_with_binance_fallback(venue_client, "BTC", "15m", 48, exchange_factory=lambda: fake_exchange)
+    assert result is None
 
 
 def _run_all():

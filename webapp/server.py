@@ -41,7 +41,7 @@ from bot.hyperliquid.client import HyperliquidClient
 from bot.hyperliquid.trader import HyperliquidTrader
 from bot.exchange import Exchange
 from bot.market_snapshot import compute_snapshot
-from bot.marketdata import coingecko_top_by_market_cap
+from bot.marketdata import binance_symbol, coingecko_top_by_market_cap
 from bot.mt5.client import MT5Client
 from bot import pending_trades
 from bot.position_sizing import risk_pct_for_fixed_usd, staged_fixed_risk_usd
@@ -74,15 +74,6 @@ _regime_cache: dict = {"data": None, "fetched_at": 0.0}
 # number of open dashboard tabs to one upstream call/minute between them.
 TOP_MCAP_CACHE_SECONDS = 60
 _top_mcap_cache: dict = {"rows": [], "fetched_at": 0.0}
-
-
-def _binance_symbol(coin: str) -> str:
-    """Hyperliquid coin name -> Binance spot symbol. Hyperliquid k-prefixes
-    1000x-denominated tokens ("kPEPE", "kBONK", "kSHIB" -- see config.yaml's
-    memecoins comment); Binance lists the plain token, so the prefix is
-    stripped before appending /USDT."""
-    base = coin[1:] if coin.startswith("k") and len(coin) > 1 and coin[1].isupper() else coin
-    return f"{base}/USDT"
 
 
 # One batch ccxt fetch_tickers() call regardless of watchlist size, so the
@@ -400,7 +391,7 @@ def api_watchlist():
     now = time.time()
     if not _watchlist_cache["rows"] or now - _watchlist_cache["fetched_at"] > WATCHLIST_CACHE_SECONDS:
         try:
-            symbols = [_binance_symbol(c) for c in WATCHLIST]
+            symbols = [binance_symbol(c) for c in WATCHLIST]
             # No explicit `symbols` filter: ccxt's binance.fetch_tickers raises
             # BadSymbol if ANY requested symbol isn't a real Binance market
             # (e.g. HYPE/USDT, Hyperliquid's own token) rather than omitting
@@ -452,7 +443,7 @@ def api_coin_chart():
             last = (bid + ask) / 2
         else:
             df = Exchange(exchange_id="binance", mode="paper").fetch_ohlcv(
-                _binance_symbol(symbol), CFG.get("timeframe", "15m"), limit=100
+                binance_symbol(symbol), CFG.get("timeframe", "15m"), limit=100
             )
             last = float(df.iloc[-1]["close"]) if len(df) else None
 
