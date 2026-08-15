@@ -111,11 +111,39 @@ def test_newly_built_zone_detectors_are_mapped():
 
 
 def test_genuinely_unbuilt_concepts_stay_unmapped():
-    # Honesty check in the other direction. Multi-candle star/soldier
-    # formations, session kill zones and inducement have no detector, and
-    # marking them mapped would hide real gaps behind a green report.
+    # Honesty check in the other direction: marking something mapped would hide
+    # a real gap behind a green report. killzone is deliberately NOT here --
+    # bot/smart_money.py::session_signal already implements London/NY/Asia
+    # windows with a dead zone, so listing it as missing was my error.
     unmapped = set(taxonomy.unmapped_keys())
-    assert unmapped == {"inducement", "killzone", "star_pattern"}, unmapped
+    assert unmapped == {
+        "inducement", "star_pattern",
+        "vwap", "bollinger", "stochastic", "adx", "volume_profile", "divergence",
+    }, unmapped
+
+
+def test_indicator_group_splits_implemented_from_missing():
+    # The split is the whole value of this group: mentions of rsi/macd/ma/atr
+    # are TUNING signal (the code exists), mentions of vwap/volume profile are
+    # FEATURE signal (it does not).
+    for key in ("rsi", "macd", "moving_average"):
+        assert taxonomy.BY_KEY[key].maps_to == "bot.indicators"
+    assert taxonomy.BY_KEY["atr"].maps_to == "bot.position_sizing"
+    assert taxonomy.BY_KEY["volume_profile"].maps_to is None
+
+
+def test_indicator_aliases_do_not_match_ordinary_english():
+    # Both of these shipped and were caught only by reading the matches. The
+    # word "squeeze" gave bollinger 135 mentions across 59 videos, and "order
+    # flow" gave cvd 195 -- neither indicator is meaningfully discussed at all.
+    # A concept whose alias is a common verb measures the language, not the idea.
+    assert "bollinger" not in taxonomy.match_terms(
+        "price will squeeze through the supply zone")
+    assert "cvd" not in taxonomy.match_terms(
+        "reading the order flow into that level")
+    # ...while the real names still match.
+    assert "bollinger" in taxonomy.match_terms("the bollinger bands are tight")
+    assert "volume_profile" in taxonomy.match_terms("check the volume profile")
 
 
 def test_candle_aliases_match_real_phrasing():

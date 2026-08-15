@@ -119,9 +119,15 @@ _LOCATION = [
 # --- timing --------------------------------------------------------------
 
 _TIMING = [
+    # Previously listed as a gap. It is not: bot/smart_money.py::session_signal
+    # already implements exactly this -- London/NY/Asia windows, the 13:00-16:00
+    # UTC overlap as peak liquidity, and a 21:00-24:00 dead zone it refuses to
+    # trade. It was simply never mapped, which had it reported as missing
+    # alongside concepts that genuinely are.
     ConceptDef("killzone", "kill zone", "timing",
                ["kill zone", "killzone", "london session", "new york session", "asian session",
-                "london open", "ny open", "session open", "power hour"]),
+                "london open", "ny open", "session open", "power hour"],
+               maps_to="bot.smart_money"),
     ConceptDef("news", "news event", "timing",
                ["news", "nfp", "cpi", "fomc", "high impact", "red folder", "economic calendar"],
                maps_to="bot.news_signal"),
@@ -205,8 +211,68 @@ _CANDLES = [
                maps_to="bot.smc.candles"),
 ]
 
+# --- classical indicators -------------------------------------------------
+#
+# SMC material is usually framed as an alternative to indicator trading, but
+# educators reach for them constantly anyway -- for confirmation, for
+# volatility, for divergence. Ignoring that vocabulary meant every such passage
+# scored nothing and the corpus looked as though indicators were never
+# discussed.
+#
+# The split here is the useful part. rsi/macd/ma/atr/cvd already exist in this
+# repo (bot/indicators.py, bot/position_sizing.py::atr,
+# bot/smart_money.py::cvd_signal), so mentions of them are TUNING signal. vwap,
+# bollinger, stochastic, adx, obv and volume profile do not exist at all, so
+# mentions of those are FEATURE signal. Same taxonomy, two very different kinds
+# of finding, and only the maps_to field distinguishes them.
+_INDICATORS = [
+    ConceptDef("rsi", "relative strength index", "indicator",
+               ["rsi", "relative strength", "overbought", "oversold"],
+               maps_to="bot.indicators"),
+    ConceptDef("macd", "macd", "indicator",
+               ["macd", "moving average convergence", "signal line cross",
+                "macd cross", "histogram"],
+               maps_to="bot.indicators"),
+    ConceptDef("moving_average", "moving average", "indicator",
+               ["moving average", "ema", "sma", "wma", "exponential moving average",
+                "simple moving average", "50 ma", "200 ma", "golden cross",
+                "death cross", "ma cross"],
+               maps_to="bot.indicators"),
+    ConceptDef("atr", "average true range", "indicator",
+               ["atr", "average true range", "true range", "volatility stop"],
+               maps_to="bot.position_sizing"),
+    # "order flow" was an alias here and accounted for 101 of the matches. It
+    # is generic SMC vocabulary for reading institutional activity, NOT
+    # cumulative volume delta -- keeping it would have reported "CVD discussed
+    # 195 times, already implemented" about a corpus that barely mentions CVD.
+    ConceptDef("cvd", "cumulative volume delta", "indicator",
+               ["cvd", "cumulative volume delta", "delta divergence", "footprint chart"],
+               maps_to="bot.smart_money"),
+    # --- not implemented anywhere in this repo ---
+    ConceptDef("vwap", "vwap", "indicator",
+               ["vwap", "volume weighted average", "anchored vwap", "avwap"]),
+    # "bands" and "squeeze" were aliases here and were almost entirely false
+    # positives: 44 of 48 hits across the corpus were the ordinary English verb
+    # ("squeeze through the supply zone", "squeeze back up"), which inflated
+    # this to 135 mentions across 59 videos and made an indicator nobody uses
+    # look like a major gap. Only unambiguous names survive.
+    ConceptDef("bollinger", "bollinger bands", "indicator",
+               ["bollinger", "bollinger band", "keltner channel"]),
+    ConceptDef("stochastic", "stochastic oscillator", "indicator",
+               ["stochastic", "stoch", "stoch rsi", "%k", "%d"]),
+    ConceptDef("adx", "average directional index", "indicator",
+               ["adx", "directional index", "dmi", "trend strength indicator"]),
+    ConceptDef("volume_profile", "volume profile", "indicator",
+               ["volume profile", "poc", "point of control", "value area",
+                "high volume node", "low volume node", "hvn", "lvn"]),
+    ConceptDef("divergence", "indicator divergence", "indicator",
+               ["bullish divergence", "bearish divergence", "hidden divergence",
+                "rsi divergence", "regular divergence"]),
+]
+
 CONCEPTS: List[ConceptDef] = (
-    _STRUCTURE + _LIQUIDITY + _ZONES + _LOCATION + _TIMING + _RISK + _CANDLES
+    _STRUCTURE + _LIQUIDITY + _ZONES + _LOCATION + _TIMING + _RISK
+    + _CANDLES + _INDICATORS
 )
 
 BY_KEY: Dict[str, ConceptDef] = {c.key: c for c in CONCEPTS}

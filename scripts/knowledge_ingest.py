@@ -123,7 +123,12 @@ def cmd_ingest(args, cfg: KnowledgeConfig) -> int:
 
 
 def cmd_reextract(args, cfg: KnowledgeConfig) -> int:
-    merged = pipeline.rebuild_candidates(_store(cfg))
+    store = _store(cfg)
+    # Concepts first, then candidates. Candidates are derived FROM concepts, so
+    # rebuilding them against a stale concept snapshot would silently produce
+    # the old answer and look like it worked.
+    pipeline.refresh_concepts(store)
+    merged = pipeline.rebuild_candidates(store)
     print(f"Rebuilt {len(merged)} candidates from the stored corpus (no network).")
     return 0
 

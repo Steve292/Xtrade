@@ -196,6 +196,40 @@ def ingest(cfg: KnowledgeConfig,
     return report
 
 
+def refresh_concepts(store: KnowledgeStore,
+                     log: Callable[[str], None] = print) -> int:
+    """Re-run concept extraction over the STORED segments. No network.
+
+    Needed whenever taxonomy.py changes. Document.concepts is a snapshot taken
+    at ingest time, so adding a concept (the indicator group, say) leaves every
+    existing document blind to it -- `stats` would report zero mentions of RSI
+    across a corpus that discusses it constantly, purely because the vocabulary
+    post-dates the ingest.
+
+    Re-downloading to fix that would be absurd: the transcripts are already on
+    disk. This is why raw captions are cached and why EXTRACTOR_VERSION is
+    separate from the transcript itself.
+    """
+    store.load()
+    changed = 0
+    for doc in store.documents():
+        if not doc.ok:
+            continue
+        segments = store.segments(doc.video_id)
+        if not segments:
+            continue
+        before = {c.key for c in doc.concepts}
+        doc.concepts = extract.concept_summary(extract.extract_concepts(segments))
+        doc.extractor_version = EXTRACTOR_VERSION
+        if {c.key for c in doc.concepts} != before:
+            changed += 1
+        store.upsert(doc)
+    store.save()
+    log(f"re-extracted {len(store.documents())} documents "
+        f"({changed} gained or lost concepts)")
+    return changed
+
+
 def rebuild_candidates(store: KnowledgeStore,
                        path: Path = candidates_mod.DEFAULT_PATH,
                        now: Optional[float] = None) -> List:
