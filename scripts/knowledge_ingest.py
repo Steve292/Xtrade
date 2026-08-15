@@ -141,7 +141,16 @@ def cmd_review(args, cfg: KnowledgeConfig) -> int:
     if args.concept:
         rows = [c for c in rows if c.concept_key == args.concept]
     if args.unmapped:
-        rows = [c for c in rows if not c.param]
+        # "No code implements this" (taxonomy maps_to is None), NOT "no tunable
+        # knob" (candidate.param is None). Filtering on param listed
+        # order_block, liquidity_pool, fvg and bos as gaps -- all of which
+        # bot/smc/ implements fully; they simply have no threshold worth
+        # proposing from a transcript. Conflating the two buried the handful of
+        # concepts that genuinely have nothing behind them under twenty that do.
+        from bot.knowledge import taxonomy
+        rows = [c for c in rows
+                if (taxonomy.BY_KEY.get(c.concept_key) is None
+                    or taxonomy.BY_KEY[c.concept_key].maps_to is None)]
     print(candidates_mod.format_table(rows, limit=args.limit))
     print(f"\n  {len(rows)} shown. Nothing here has changed config.yaml.")
     return 0
