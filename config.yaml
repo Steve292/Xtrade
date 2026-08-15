@@ -131,10 +131,14 @@ knowledge:
   # is updated far more often than this repo). Blank searches PATH; $YTDLP_PATH
   # in .env also works. On this machine the only existing copy lives in an
   # unrelated project's venv, so point at it explicitly or `pip install yt-dlp`.
-  ytdlp_path: ""
+  # Points at venv-knowledge/, a SEPARATE venv from the trading venv. Whisper
+  # drags in ctranslate2/onnxruntime and can move numpy, and venv/ is what runs
+  # com.smc.autotrader -- so the ingestion toolchain is kept out of it entirely.
+  # Both venvs live inside this project; neither reaches into another repo.
+  ytdlp_path: "/Users/mac/Projects/smc-trading-bot/venv-knowledge/bin/yt-dlp"
   data_dir: knowledge
   search_limit: 25
-  max_videos_per_channel: 50   # the confirmed channel has ~220; raise deliberately
+  max_videos_per_channel: 250  # the confirmed channel has ~220
   min_video_seconds: 120       # skip Shorts -- no rule is taught in 45 seconds
   max_video_seconds: 10800
   segment_seconds: 30.0        # concept matching + quoting happen on these chunks
@@ -145,9 +149,14 @@ knowledge:
     # seconds per video, Whisper is minutes, and max_videos_per_run stops a
     # routine ingest quietly becoming an overnight job. Full coverage of an
     # uncaptioned backlog is reached across runs, on purpose.
-    enabled: false
+    # ON, and uncapped for a full-channel backfill. Only ~10% of this channel's
+    # videos have captions, so without ASR the corpus would cover a tenth of it.
+    # This is an hours-long run by nature: faster-whisper base on CPU is roughly
+    # 5-10x realtime, so ~200 uncaptioned videos is 8-12h. Lower
+    # max_videos_per_run back to single digits for routine incremental runs.
+    enabled: true
     model: base
-    max_videos_per_run: 5
+    max_videos_per_run: 250
   llm:
     # Optional local ollama pass. It never DETECTS concepts (taxonomy.py does
     # that, deterministically) -- it only proposes a value for a segment that

@@ -1,4 +1,7 @@
 venv/
+# Separate venv for the knowledge pipeline (yt-dlp + faster-whisper). Kept out
+# of venv/ so ASR dependencies can never move numpy under the live trader.
+venv-knowledge/
 .env
 __pycache__/
 *.pyc
