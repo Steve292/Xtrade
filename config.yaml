@@ -116,7 +116,40 @@ hyperliquid:
 
 # Trade screening — a signal must clear ALL of these before it is approved to trade
 screening:
-  min_confidence: 0.55     # SMC confluence score floor
+  # DECISION MODE -- the one change in this file backed by a measurement rather
+  # than by consensus among educators.
+  #
+  # "all" (the original) requires every gate to pass. On 5,000 bars of XAUUSDc
+  # with ATR x2.0 stops it approved TWO trades out of ~100 signals. Per-gate
+  # rejection over 65 sampled signals: Fibonacci OTE 86%, Supply/Demand 80%,
+  # Sniper 29%, Liquidity sweep 26%, Top-down 15%. No single gate is at fault --
+  # multiply those pass rates and ~1.2% falls out, which is the 1.5% observed.
+  # A system taking 2 trades in 2.5 months also cannot be VALIDATED: every
+  # backtest returns "inconclusive, too few trades", which happened five times
+  # before the cause was found.
+  #
+  # "consensus" keeps all the same checks but stops treating each as a veto.
+  # Measured on the same data:
+  #     AND of 7 gates      2 trades  PF   -    ret 2.25%
+  #     consensus >=35%    93 trades  PF 1.150  ret 4.41%  maxDD 3.7%
+  #     consensus >=45%    63 trades  PF 1.238  ret 4.30%  maxDD 2.8%   <- chosen
+  #     consensus >=65%    13 trades  PF 1.533  ret 2.05%  maxDD 1.8%
+  #
+  # 65% has the best profit factor and is REJECTED: 13 trades is below the
+  # 30-trade floor bot/knowledge/verify.py requires, and best-PF-on-smallest-
+  # sample is the overfit signature. 45% clears the floor at 63 trades and beats
+  # the UNSCREENED strategy on both axes (PF 1.074 -> 1.238, ret 2.36% -> 4.30%)
+  # at a lower drawdown.
+  #
+  # Thresholds between 0.41 and 0.60 behave identically: there are 5 soft checks,
+  # so the pass share is quantised to fifths and both round to "3 of 5".
+  #
+  # Honest limits: one instrument, 2.5 months, 63 trades, and a 33% win rate
+  # carried by the 2:1 reward:risk. Better than every alternative measured; not
+  # a proven edge across instruments or regimes.
+  mode: consensus
+  consensus_threshold: 0.45
+  min_confidence: 0.55     # SMC confluence score floor (a HARD veto in consensus mode)
   min_rr: 2.0              # minimum reward:risk
   sniper_confidence: 0.65  # confidence required for a "sniper" entry
   max_stop_pct: 0.25       # raised from 2% to fit the fixed stop_loss_pct (0.20) above

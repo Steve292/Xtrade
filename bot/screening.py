@@ -119,6 +119,36 @@ class ScreenConfig:
     # on two frames removes trades, which has to be measured, not assumed.
     gate_timeframe: str = "ltf"
 
+    # HOW the checks combine.
+    #
+    #   "all"       every check must pass (the original behaviour, default)
+    #   "consensus" checks become evidence, and approval is a weighted score
+    #
+    # Measured, not theorised. On 5,000 bars of XAUUSDc with ATR x2.0 stops the
+    # strategy produced ~100 signals and the seven-gate AND approved TWO. A
+    # per-gate breakdown over 65 sampled signals: Fibonacci OTE blocked 86%,
+    # Supply/Demand 80%, Sniper 29%, Liquidity sweep 26%, Top-down 15%. No
+    # single gate is at fault -- multiply those pass rates and you get ~1.2%,
+    # which is the 1.5% actually observed. Relaxing any ONE gate adds 1-2
+    # trades because the rejections overlap.
+    #
+    # An AND of seven independent-ish conditions cannot produce a tradeable
+    # sample, and a system that never trades cannot be validated either --
+    # every backtest comes back "inconclusive, too few trades", which is
+    # exactly what happened five times before this was found.
+    #
+    # "consensus" keeps every check but stops treating each as a veto: a setup
+    # failing one condition while strongly satisfying the rest can still be
+    # approved. That is the "if one concept fails, can the others validate it"
+    # behaviour, applied to the gates themselves.
+    mode: str = "all"
+    consensus_threshold: float = 0.45   # share of weighted checks that must pass
+    # Checks that remain absolute vetoes even in consensus mode. Risk/reward is
+    # arithmetic, not opinion -- a 1:0.3 trade is bad regardless of how much
+    # else agrees, and letting confluence outvote it would be how a scoring
+    # system quietly reintroduces terrible trades.
+    hard_checks: tuple = ("SMC confluence", "Risk/reward")
+
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
         return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
@@ -368,6 +398,21 @@ class TradeScreener:
                 f"({cr.agreed}a/{cr.dissented}d/{cr.abstained}x, "
                 f"min {cfg.min_consensus_score:+.2f})",
             ))
+
+        if (cfg.mode or "all").lower() == "consensus":
+            hard = [c for c in checks if c.name in cfg.hard_checks]
+            soft = [c for c in checks if c.name not in cfg.hard_checks]
+            hard_ok = all(c.passed for c in hard)
+            share = ((sum(1 for c in soft if c.passed) / len(soft))
+                     if soft else 1.0)
+            approved = hard_ok and share >= cfg.consensus_threshold
+            checks.append(Check(
+                "Consensus mode", approved,
+                f"{sum(1 for c in soft if c.passed)}/{len(soft)} soft checks "
+                f"({share:.0%}, need {cfg.consensus_threshold:.0%})"
+                + ("" if hard_ok else "; a HARD check failed"),
+            ))
+            return ScreenResult(approved, direction, checks)
 
         approved = all(c.passed for c in checks)
         return ScreenResult(approved, direction, checks)
