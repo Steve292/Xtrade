@@ -418,12 +418,18 @@ class TradeScreener:
             hard = [c for c in checks if c.name in cfg.hard_checks]
             soft = [c for c in checks if c.name not in cfg.hard_checks]
             hard_ok = all(c.passed for c in hard)
-            share = ((sum(1 for c in soft if c.passed) / len(soft))
-                     if soft else 1.0)
+            # WEIGHTED by corpus evidence, not a plain count. Counting equally
+            # made the Fibonacci gate (weight 0.29, 25% of documents) worth as
+            # much as structure (1.00, 89%) -- the derived weights existed but
+            # the decision consuming them ignored them entirely.
+            from bot.smc.consensus import check_weight
+            total_w = sum(check_weight(c.name) for c in soft)
+            passed_w = sum(check_weight(c.name) for c in soft if c.passed)
+            share = (passed_w / total_w) if total_w > 0 else 1.0
             approved = hard_ok and share >= cfg.consensus_threshold
             checks.append(Check(
                 "Consensus mode", approved,
-                f"{sum(1 for c in soft if c.passed)}/{len(soft)} soft checks "
+                f"{passed_w:.2f}/{total_w:.2f} weighted "
                 f"({share:.0%}, need {cfg.consensus_threshold:.0%})"
                 + ("" if hard_ok else "; a HARD check failed"),
             ))

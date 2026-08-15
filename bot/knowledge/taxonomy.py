@@ -312,9 +312,55 @@ _WYCKOFF = [
                maps_to="bot.smc.candles"),
 ]
 
+
+# --- crypto narrative / token selection -----------------------------------
+#
+# A SECOND VOCABULARY, added because the first one could not read a whole
+# channel. Ingesting crashiusclay69 (Crash Trading) produced 3.0 concept
+# matches per document against 11.6 elsewhere, with mitigation, order_block,
+# supply_demand, sweep, stop_loss, risk_reward, confluence, bos, htf_alignment
+# and volume_profile all at literally ZERO.
+#
+# That is not an empty channel, it is a vocabulary mismatch. The six
+# price-action channels answer "where do I enter". This one answers "which
+# token, and why now". The original taxonomy only has words for the first
+# question, so it read substantive content as noise.
+#
+# This matters for the bot specifically: config.yaml trades kPEPE, WIF,
+# POPCAT, BRETT and MELANIA on Hyperliquid, and NONE of the price-action
+# channels discuss memecoins at all. bot/hotness.py's meme-season score has
+# had no evidence base behind it.
+#
+# Mapping is deliberately conservative. bot/hotness.py genuinely implements
+# dominance-based meme-season scoring, so meme_season maps to it. The other
+# four map to NOTHING on purpose: bot/smart_money.py::narrative_decay_signal
+# exists but is a stub that always returns {"available": False} with no data
+# source, and mapping to a function that never returns a reading would claim
+# coverage this repo does not have.
+_NARRATIVE = [
+    ConceptDef("meme_season", "meme season rotation", "narrative",
+               ["meme season", "meme coin season", "altseason", "alt season",
+                "btc dominance", "market rotation", "capital rotation",
+                "risk on rotation"],
+               maps_to="bot.hotness"),
+    ConceptDef("narrative", "narrative and meta", "narrative",
+               ["narrative", "the meta", "hype cycle", "trending sector",
+                "narrative shift", "narrative play"]),
+    ConceptDef("catalyst", "catalyst event", "narrative",
+               ["catalyst", "exchange listing", "binance listing",
+                "coinbase listing", "airdrop", "token unlock", "vesting schedule",
+                "tge", "token generation event"]),
+    ConceptDef("tokenomics", "tokenomics and supply", "narrative",
+               ["market cap", "mcap", "circulating supply", "total supply",
+                "fully diluted", "fdv", "token supply"]),
+    ConceptDef("social_sentiment", "social sentiment", "narrative",
+               ["social volume", "twitter mentions", "community sentiment",
+                "influencer", "shill", "shilling", "crowd sentiment"]),
+]
+
 CONCEPTS: List[ConceptDef] = (
     _STRUCTURE + _LIQUIDITY + _ZONES + _LOCATION + _TIMING + _RISK
-    + _CANDLES + _INDICATORS + _WYCKOFF
+    + _CANDLES + _INDICATORS + _WYCKOFF + _NARRATIVE
 )
 
 BY_KEY: Dict[str, ConceptDef] = {c.key: c for c in CONCEPTS}
@@ -370,3 +416,34 @@ def match_terms(text: str) -> Dict[str, int]:
 def unmapped_keys() -> List[str]:
     """Concepts with nothing in this repo consuming them yet."""
     return [c.key for c in CONCEPTS if not c.maps_to]
+
+
+# --- content-type segregation --------------------------------------------
+
+PRICE_ACTION_CATEGORIES = frozenset({
+    "structure", "liquidity", "zone", "location", "timing", "risk", "candle",
+    "wyckoff", "indicator",
+})
+NARRATIVE_CATEGORIES = frozenset({"narrative"})
+
+
+def category_of(key: str) -> str:
+    c = BY_KEY.get(key)
+    return c.category if c else ""
+
+
+def price_action_density(concept_keys) -> float:
+    """Share of a document's concepts that are price-action rather than narrative.
+
+    Used to keep the two content types apart when DERIVING consensus weights.
+    Weights are channel-breadth x document-share, so folding in 25 memecoin
+    documents would drag down concepts measured across 448 price-action ones --
+    not because those concepts got less important, but because a channel that
+    never discusses entries was counted as evidence that entries matter less.
+    Different questions cannot share a denominator.
+    """
+    keys = list(concept_keys)
+    if not keys:
+        return 0.0
+    pa = sum(1 for k in keys if category_of(k) in PRICE_ACTION_CATEGORIES)
+    return pa / len(keys)

@@ -69,6 +69,7 @@ WEIGHTS: dict = {
     # 16% of documents. Still the lowest weight, no longer a single-source
     # artifact.
     "structure": 1.00,        # 6 ch, 397 docs, 89%
+    "take_profit": 0.87,      # 6 ch, 346 docs, 77%
     "liquidity_sweep": 0.76,  # 6 ch, 300 docs, 67%
     "mitigation": 0.58,       # 6 ch, 232 docs, 52%   (was 1.0)
     "candle": 0.53,           # 6 ch, 210 docs, 47%
@@ -312,3 +313,31 @@ def evaluate(df: pd.DataFrame, htf_df: pd.DataFrame | None,
         dissented=sum(1 for v in votes if v.verdict == DISAGREE),
         abstained=sum(1 for v in votes if v.verdict == ABSTAIN),
     )
+
+
+# bot/screening.py check name -> concept weight above. Without this the
+# consensus MODE counted soft checks unweighted, so the Fibonacci gate
+# (evidence weight 0.29) carried exactly as much as structure (1.00) -- the
+# derived weights existed but the decision that uses them ignored them.
+CHECK_WEIGHTS: dict = {
+    "Top-down alignment": WEIGHTS["structure"],
+    "Liquidity sweep": WEIGHTS["liquidity_sweep"],
+    "Supply/Demand": WEIGHTS["supply_demand"],
+    "Fibonacci OTE (final)": WEIGHTS["fibonacci"],
+    "Mitigation": WEIGHTS["mitigation"],
+    "Breaker": WEIGHTS["breaker"],
+    "Candle confirmation": WEIGHTS["candle"],
+    "Wyckoff": WEIGHTS["wyckoff"],
+    "Value area edge": WEIGHTS["volume_profile"],
+    "VWAP side": WEIGHTS["volume_profile"],
+    "Premium/Discount": WEIGHTS["premium_discount"],
+    "Target at a level": WEIGHTS["take_profit"],
+    # Not a corpus concept -- a confidence-plus-stop-distance check. Given the
+    # median weight rather than 1.0 so it neither dominates nor is ignored.
+    "Sniper entry": 0.5,
+}
+
+
+def check_weight(name: str) -> float:
+    """Evidence weight for a screen check. Unknown checks get the median."""
+    return CHECK_WEIGHTS.get(name, 0.5)

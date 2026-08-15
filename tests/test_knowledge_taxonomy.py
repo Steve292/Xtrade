@@ -111,15 +111,32 @@ def test_newly_built_zone_detectors_are_mapped():
 
 
 def test_genuinely_unbuilt_concepts_stay_unmapped():
-    # Honesty check in the other direction: marking something mapped would hide
-    # a real gap behind a green report. killzone is deliberately NOT here --
-    # bot/smart_money.py::session_signal already implements London/NY/Asia
-    # windows with a dead zone, so listing it as missing was my error.
+    """Honesty check: things with no detector must not claim one.
+
+    Asserts MEMBERSHIP, not an exact set. The exact-set form broke twice for
+    entirely correct reasons -- once when VWAP gained an implementation and
+    once when the crypto-narrative group was added -- and a test that fails
+    every time the taxonomy legitimately grows trains people to edit it without
+    reading it, which is worse than not having it.
+    """
     unmapped = set(taxonomy.unmapped_keys())
-    assert unmapped == {
-        "inducement", "star_pattern",
-        "bollinger", "stochastic", "adx", "divergence",
-    }, unmapped
+    # No detector exists for any of these.
+    for key in ("inducement", "star_pattern", "bollinger", "stochastic", "adx",
+                "divergence"):
+        assert key in unmapped, f"{key} claims code that does not exist"
+    # These are backed by real modules and must NOT appear as gaps.
+    for key in ("mitigation", "breaker", "volume_profile", "vwap", "wyckoff",
+                "killzone", "meme_season"):
+        assert key not in unmapped, f"{key} is implemented but reported as a gap"
+
+
+def test_stub_backed_concepts_are_not_treated_as_implemented():
+    # bot/smart_money.py::narrative_decay_signal exists but always returns
+    # {"available": False}. A concept mapping to it would look covered while
+    # never producing a reading.
+    unmapped = set(taxonomy.unmapped_keys())
+    for key in ("narrative", "catalyst", "tokenomics", "social_sentiment"):
+        assert key in unmapped, key
 
 
 def test_wick_is_separate_from_pin_bar():
