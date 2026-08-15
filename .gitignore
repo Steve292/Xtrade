@@ -30,6 +30,16 @@ dominance_history.json
 # Local Codex CLI session state (machine-specific, not shared project config)
 .codex/
 
+# Knowledge ingestion (bot/knowledge/) — local only, never shared. Transcripts
+# of third-party videos are derived works we have no right to redistribute, and
+# the corpus is regenerable machine-local data. knowledge_channels.json is a
+# human authorization record; knowledge_candidates.json holds review decisions.
+knowledge_channels.json
+knowledge_candidates.json
+# Leading slash matters: an unanchored "knowledge/" also matches bot/knowledge/
+# and would silently exclude this feature's entire source tree from the repo.
+/knowledge/
+
 # Stray machine-local files that ended up in the repo root, not project data
 bugreport-sdk_gphone64_arm64-*.zip
 msedgewebview2.dxvk-cache

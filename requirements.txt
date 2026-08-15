@@ -22,3 +22,15 @@ flask>=3.1.0
 # macOS menu bar (optional — auto-installed by install-macos.sh)
 # rumps>=0.4.0
 # pyobjc-framework-Cocoa>=10.0
+
+# Trading-knowledge ingestion (bot/knowledge/) — optional, report-only, not on
+# the live trading path. yt-dlp is invoked as an external BINARY and never
+# imported: the CLI is its stable interface, it must be updatable independently
+# of this repo as YouTube breaks extractors, and nobody installing a trading bot
+# should get a YouTube downloader by default. Install it yourself, or point
+# knowledge.ytdlp_path / $YTDLP_PATH at an existing copy.
+# yt-dlp>=2025.1.1
+#
+# Whisper fallback, only for videos with no captions at all. faster-whisper is
+# the CPU-friendly one; openai-whisper pulls in torch (~2GB).
+# faster-whisper>=1.1.0

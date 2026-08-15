@@ -119,3 +119,42 @@ capital_guard:
   # liquidity_shock_volume_drop_pct: -50.0
   # profit_lock_trigger_pct: 20.0        # check_profit_lock() reports a lock amount; a human executes the move
   # profit_lock_fraction: 0.10
+
+# Trading-knowledge ingestion (bot/knowledge/, scripts/knowledge_ingest.py).
+# REPORT ONLY. Nothing under bot/knowledge/ is imported by the live trading
+# path, and nothing there writes this file -- the pipeline produces ranked,
+# cited rule candidates and prints the config edit for a human to make, the
+# same boundary capital_guard's profit-lock and entry_rules already draw.
+knowledge:
+  enabled: true
+  # Path to a yt-dlp BINARY (never imported -- it ships its own interpreter and
+  # is updated far more often than this repo). Blank searches PATH; $YTDLP_PATH
+  # in .env also works. On this machine the only existing copy lives in an
+  # unrelated project's venv, so point at it explicitly or `pip install yt-dlp`.
+  ytdlp_path: ""
+  data_dir: knowledge
+  search_limit: 25
+  max_videos_per_channel: 50   # the confirmed channel has ~220; raise deliberately
+  min_video_seconds: 120       # skip Shorts -- no rule is taught in 45 seconds
+  max_video_seconds: 10800
+  segment_seconds: 30.0        # concept matching + quoting happen on these chunks
+  segment_max_chars: 600
+  min_support_videos: 2        # one throwaway sentence is not a finding
+  whisper:
+    # Fallback ASR for videos with NO captions. Off by default: captions are
+    # seconds per video, Whisper is minutes, and max_videos_per_run stops a
+    # routine ingest quietly becoming an overnight job. Full coverage of an
+    # uncaptioned backlog is reached across runs, on purpose.
+    enabled: false
+    model: base
+    max_videos_per_run: 5
+  llm:
+    # Optional local ollama pass. It never DETECTS concepts (taxonomy.py does
+    # that, deterministically) -- it only proposes a value for a segment that
+    # already scored one, and its output is discarded unless the parameter name
+    # is on the allow-list, the value is in range, AND the number appears
+    # verbatim in the quoted text.
+    enabled: true
+    endpoint: "http://127.0.0.1:11434"
+    model: "qwen2.5:14b"
+    max_segments_per_video: 40
