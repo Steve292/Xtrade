@@ -122,6 +122,35 @@ def test_no_signal_short_circuits_before_any_optional_gate():
     assert [c.name for c in res.checks] == ["SMC confluence"]
 
 
+def test_new_gates_appear_only_when_enabled():
+    assert "Premium/Discount" in _names(ScreenConfig(require_premium_discount=True))
+    assert "Target at a level" in _names(ScreenConfig(require_target_at_level=True))
+    assert "Concept consensus" in _names(ScreenConfig(min_consensus_score=0.0))
+
+
+def test_a_disabled_gate_does_not_break_an_enabled_one():
+    """Regression: a local import inside one gate broke a DIFFERENT gate.
+
+    `from bot.smc.liquidity import detect_liquidity_pools` inside the
+    require_target_at_level branch made that name local to screen() for the
+    whole function body, so gate 3 -- a CORE gate, always on -- raised
+    UnboundLocalError even with the new gate switched off. Python rebinds the
+    name for the entire scope, not just the branch. This asserts the core
+    screen still runs with every optional gate off, which is exactly the case
+    that broke.
+    """
+    res = TradeScreener(ScreenConfig()).screen(SIG, DF, HTF)
+    names = [c.name for c in res.checks]
+    assert "Liquidity sweep" in names, names
+    assert len(names) == 7
+
+
+def test_consensus_gate_accepts_a_threshold_of_zero_as_active():
+    # min_consensus_score=0.0 is falsy. If the gate tested truthiness instead
+    # of `is not None`, a threshold of exactly zero would silently disable it.
+    assert "Concept consensus" in _names(ScreenConfig(min_consensus_score=0.0))
+
+
 def _run_all() -> bool:
     ok = True
     for name, fn in sorted(globals().items()):

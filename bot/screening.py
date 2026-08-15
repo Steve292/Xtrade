@@ -85,6 +85,25 @@ class ScreenConfig:
     require_value_area_edge: bool = False     # entry must sit at a value-area edge
     volume_profile_bins: int = 50
 
+    # Gates 13-15, added after comparing gate coverage against what the
+    # 329-document corpus actually emphasises. Each closes a hole where a
+    # heavily-taught concept had no gate at all:
+    #   premium/discount  4 channels, 164 videos, 866 mentions -- scored inside
+    #                     SMCStrategy but never an independent veto
+    #   take profit       4 channels, 263 videos, 2512 mentions -- the SECOND
+    #                     most-discussed concept in the corpus, and gate 4 only
+    #                     checked the RR ratio, never whether the target sits
+    #                     at a level price might actually reach
+    #   consensus         the weighted vote across all ten concepts
+    require_premium_discount: bool = False
+    require_target_at_level: bool = False
+    target_tolerance_pct: float = 0.004
+    # Minimum bot.smc.consensus score (-1..+1). None disables. This is the
+    # "approve only what the ingested evidence supports" gate: weights come
+    # from cross-channel breadth, so a setup carried by four-educator concepts
+    # scores above one carried by single-source vocabulary.
+    min_consensus_score: float | None = None
+
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
         return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
@@ -249,6 +268,61 @@ class TradeScreener:
                 "Value area edge", edge == want,
                 f"entry at value-area {edge}" if edge
                 else "entry is not at a value-area edge",
+            ))
+
+        if cfg.require_premium_discount:
+            from bot.smc.structure import (is_in_discount, is_in_premium,
+                                           premium_discount_zone)
+            zone = premium_discount_zone(df, swings)
+            if zone is None:
+                checks.append(Check("Premium/Discount", False, "no clean range"))
+            else:
+                ok = (is_in_discount(signal.entry, zone) if direction == "long"
+                      else is_in_premium(signal.entry, zone))
+                side = "discount" if direction == "long" else "premium"
+                checks.append(Check(
+                    "Premium/Discount", ok,
+                    f"entry {'in' if ok else 'NOT in'} {side} "
+                    f"(eq {zone[1]:.4g})",
+                ))
+
+        if cfg.require_target_at_level:
+            # Gate 4 checks the RR RATIO. It never checks that the target is a
+            # place price might actually go. A 1:5 target floating in open air
+            # is arithmetically excellent and practically unreachable -- which
+            # is the same failure mode as the 20% fixed stop, one step later in
+            # the trade.
+            # NO local imports here. detect_liquidity_pools and
+            # detect_supply_demand_zones are already imported at module scope,
+            # and re-importing them inside this branch makes the names LOCAL to
+            # screen() for its whole body -- which broke gate 3 with an
+            # UnboundLocalError even when this gate was switched off. A local
+            # import in one branch silently rebinds a module-level name
+            # everywhere in the function.
+            tol = signal.take_profit * cfg.target_tolerance_pct
+            pools = detect_liquidity_pools(df, cfg.liquidity_tolerance_pct)
+            zones = detect_supply_demand_zones(df, swings)
+            near_pool = any(abs(p.level - signal.take_profit) <= tol for p in pools)
+            near_zone = any(
+                (z.bottom - tol) <= signal.take_profit <= (z.top + tol)
+                for z in zones)
+            hit = near_pool or near_zone
+            checks.append(Check(
+                "Target at a level", hit,
+                ("target sits at " + ("liquidity" if near_pool else "a zone"))
+                if hit else "target is in open air, not at any liquidity or zone",
+            ))
+
+        if cfg.min_consensus_score is not None:
+            from bot.smc.consensus import evaluate as consensus_evaluate
+            cr = consensus_evaluate(df, htf_df, direction, signal.entry)
+            ok = (cr.verdict != "no_opinion"
+                  and cr.score >= cfg.min_consensus_score)
+            checks.append(Check(
+                "Concept consensus", ok,
+                f"{cr.verdict} score {cr.score:+.2f} "
+                f"({cr.agreed}a/{cr.dissented}d/{cr.abstained}x, "
+                f"min {cfg.min_consensus_score:+.2f})",
             ))
 
         approved = all(c.passed for c in checks)
