@@ -149,11 +149,35 @@ def search_videos(query: str, limit: int, ytdlp_path: str,
     return _entries(_dump_json(argv, runner, timeout))
 
 
+def list_playlists(channel_url: str, limit: int, ytdlp_path: str,
+                   runner: Runner = default_runner,
+                   timeout: float = 180.0) -> List[dict]:
+    """The channel's playlists — where lecture series and courses actually live.
+
+    A channel's /videos tab is reverse-chronological uploads. Structured
+    teaching content is almost always organised into playlists instead, and an
+    ingester that only reads /videos silently misses the most deliberate
+    material on the channel.
+    """
+    url = channel_url.rstrip("/")
+    if not url.endswith("/playlists"):
+        url += "/playlists"
+    argv = _base_argv(ytdlp_path) + [
+        "--flat-playlist", "--dump-single-json",
+        "--playlist-end", str(int(limit)), url,
+    ]
+    return _entries(_dump_json(argv, runner, timeout))
+
+
 def list_channel_videos(channel_url: str, limit: int, ytdlp_path: str,
                         runner: Runner = default_runner,
                         timeout: float = 180.0) -> List[dict]:
     url = channel_url.rstrip("/")
-    if not url.endswith("/videos"):
+    # A playlist URL is already a complete listing target. Appending /videos to
+    # it produces a 404, so a confirmed playlist source would silently yield
+    # nothing -- indistinguishable from "the playlist is empty".
+    is_playlist = "list=" in url or "/playlist" in url
+    if not is_playlist and not url.endswith("/videos"):
         url += "/videos"
     argv = _base_argv(ytdlp_path) + [
         "--flat-playlist", "--dump-single-json",

@@ -85,6 +85,29 @@ def _confirmed(tmp: Path) -> Path:
     return path
 
 
+def test_playlist_urls_are_not_mangled_with_a_videos_suffix():
+    # Lecture series live in playlists, and a playlist URL is already a
+    # complete listing target. Appending /videos to it yields a 404, which the
+    # pipeline would record as "0 videos" -- indistinguishable from an empty
+    # playlist, and silent.
+    from bot.knowledge import ytdlp
+    seen = []
+
+    def runner(argv, timeout=120.0, cwd=None):
+        seen.append(argv[-1])
+        return RunResult(0, json.dumps({"entries": []}), "")
+
+    ytdlp.list_channel_videos(
+        "https://www.youtube.com/playlist?list=PLabc", 10, "yt-dlp", runner=runner)
+    assert seen[-1].endswith("list=PLabc"), seen
+    assert "/videos" not in seen[-1]
+
+    # ...while a bare channel URL still gets the uploads tab.
+    ytdlp.list_channel_videos(
+        "https://www.youtube.com/@someone", 10, "yt-dlp", runner=runner)
+    assert seen[-1].endswith("/videos"), seen
+
+
 def test_unconfirmed_channel_is_never_touched():
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)

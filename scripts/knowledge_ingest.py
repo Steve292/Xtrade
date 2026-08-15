@@ -73,6 +73,27 @@ def cmd_channels(args, cfg: KnowledgeConfig) -> int:
             print(f"  {c.channel_id}  {c.channel_name}{flag}\n      {c.channel_url}")
         return 0
 
+    if args.action == "playlists":
+        url = args.url or (channels_mod.list_confirmed(path)[0].channel_url
+                           if channels_mod.list_confirmed(path) else "")
+        if not url:
+            print("Pass --url <channel> (or confirm a channel first).")
+            return 2
+        pls = ytdlp.list_playlists(url, 100, _ytdlp(args, cfg),
+                                   timeout=cfg.request_timeout_sec)
+        if not pls:
+            print(f"No playlists found on {url}")
+            return 0
+        print(f"Playlists on {url}:\n")
+        for pl in pls:
+            n = pl.get("playlist_count") or pl.get("video_count") or "?"
+            print(f"  {str(n):>4} videos  {pl.get('title','')[:60]}")
+            print(f"              {pl.get('url') or pl.get('webpage_url','')}")
+        print("\n  A playlist can be confirmed as its own source:")
+        print("    knowledge_ingest.py channels confirm --channel-id <id> "
+              "--name <name> --url <playlist-url>")
+        return 0
+
     if args.action == "search":
         matches = channels_mod.search_channels(
             args.query, cfg.search_limit, _ytdlp(args, cfg),
@@ -214,7 +235,7 @@ def main() -> int:
 
     c = sub.add_parser("channels")
     c.add_argument("action", choices=["search", "confirm", "list", "disable",
-                                      "enable", "remove"])
+                                      "enable", "remove", "playlists"])
     c.add_argument("query", nargs="?", default="")
     c.add_argument("--channel-id", default="")
     c.add_argument("--name", default="")
