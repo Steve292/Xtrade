@@ -71,28 +71,45 @@ def _masked(text: str) -> str:
     return out
 
 
-def extract_numbers(text: str, concept_key: str) -> List[Tuple[str, float]]:
-    """Numbers in `text` that could plausibly be a value for `concept_key`."""
+PROXIMITY_WINDOW = 60   # characters between the concept phrase and the number
+
+
+def extract_numbers(text: str, concept_key: str,
+                    near: Optional[List[Tuple[int, int]]] = None,
+                    window: int = PROXIMITY_WINDOW) -> List[Tuple[str, float, str]]:
+    """Numbers in `text` that could plausibly be a value for `concept_key`.
+
+    Returns (raw_text, value, family) triples. The FAMILY is not decoration --
+    it is the unit, and dropping it caused the worst bug this pipeline has
+    produced. "risk 1% per trade" yields 1.0 from the pct family, and
+    max_stop_pct is a FRACTION in this codebase (0.25 means 25%). Without the
+    family tag, 1.0 landed inside max_stop_pct's 0.001-1.0 range, passed every
+    validation, and surfaced as the single highest-scoring candidate in the
+    whole review file: "set max_stop_pct to 1" -- a 100% stop loss, presented
+    to a human as the most strongly evidenced recommendation available.
+
+    Carrying the unit is what lets candidates.py convert instead of guess.
+    """
     families = _NUMERIC_CONCEPTS.get(concept_key)
     if not families:
         return []
     scrubbed = _masked(text)
-    found: List[Tuple[str, float]] = []
+    found: List[Tuple[str, float, str, int]] = []   # + match position
 
     if "ratio" in families:
         for m in _RATIO_RE.finditer(scrubbed):
             risk, reward = float(m.group(1)), float(m.group(2))
             if risk > 0 and reward > 0:
-                found.append((m.group(0), reward / risk))
+                found.append((m.group(0), reward / risk, "ratio", m.start()))
     if "r_mult" in families:
         for m in _R_MULT_RE.finditer(scrubbed):
-            found.append((m.group(0), float(m.group(1))))
+            found.append((m.group(0), float(m.group(1)), "ratio", m.start()))
     if "pct" in families:
         for m in _PCT_RE.finditer(scrubbed):
-            found.append((m.group(0), float(m.group(1))))
+            found.append((m.group(0), float(m.group(1)), "percent", m.start()))
     if "bars" in families:
         for m in _BARS_RE.finditer(scrubbed):
-            found.append((m.group(0), float(m.group(1))))
+            found.append((m.group(0), float(m.group(1)), "count", m.start()))
     if "fib" in families:
         for m in _FIB_RE.finditer(scrubbed):
             raw = m.group(1)
@@ -100,14 +117,24 @@ def extract_numbers(text: str, concept_key: str) -> List[Tuple[str, float]]:
             # Only accept recognised retracement levels. Without this, any
             # three-digit number in the sentence becomes a fib "suggestion".
             if any(abs(val - f) < 1e-6 for f in _FIB_VALID):
-                found.append((raw, val))
+                found.append((raw, val, "fraction", m.start()))
+
+    if near is not None:
+        # PROXIMITY. A number is evidence for a concept only if it sits beside
+        # that concept's words. Segment-level co-occurrence alone produced
+        # "max_stop_pct -> 0.9" out of someone saying "I was 90% sure" in the
+        # same half-minute as the phrase "stop loss". Distance is a crude
+        # attribution signal, but it is enormously better than none.
+        found = [f for f in found
+                 if any(abs(f[3] - s) <= window or abs(f[3] - e) <= window
+                        for s, e in near)]
 
     seen = set()
     unique = []
-    for raw, val in found:
-        if (raw, val) not in seen:
-            seen.add((raw, val))
-            unique.append((raw, val))
+    for raw, val, fam, _pos in found:
+        if (raw, val, fam) not in seen:
+            seen.add((raw, val, fam))
+            unique.append((raw, val, fam))
     return unique
 
 
@@ -121,15 +148,17 @@ class ConceptHit:
     end: float
     count: int
     quote: str
-    numbers: List[Tuple[str, float]] = field(default_factory=list)
+    # (raw_text, value, family) -- family is the unit and must not be dropped.
+    numbers: List[Tuple[str, float, str]] = field(default_factory=list)
 
 
 def extract_concepts(segments: List[Segment]) -> List[ConceptHit]:
     hits: List[ConceptHit] = []
     for i, seg in enumerate(segments):
-        matched = taxonomy.match_terms(seg.text)
-        if not matched:
+        spans = taxonomy.match_spans(seg.text)
+        if not spans:
             continue
+        matched = {k: len(v) for k, v in spans.items()}
         quote = seg.text if len(seg.text) <= QUOTE_MAX_CHARS else (
             seg.text[:QUOTE_MAX_CHARS].rsplit(" ", 1)[0] + "…"
         )
@@ -137,7 +166,7 @@ def extract_concepts(segments: List[Segment]) -> List[ConceptHit]:
             hits.append(ConceptHit(
                 key=key, segment_index=i, start=seg.start, end=seg.end,
                 count=count, quote=quote,
-                numbers=extract_numbers(seg.text, key),
+                numbers=extract_numbers(seg.text, key, near=spans.get(key)),
             ))
     return hits
 

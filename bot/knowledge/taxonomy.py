@@ -208,8 +208,14 @@ _TERM_INDEX = sorted(
 )
 
 
-def match_terms(text: str) -> Dict[str, int]:
-    """Concept key -> hit count for `text`.
+def match_spans(text: str) -> Dict[str, List[tuple]]:
+    """Concept key -> list of (start, end) character spans in `text`.
+
+    Positions matter, not just counts: a number is only evidence for a concept
+    if it sits NEAR that concept's words. Without spans, extract.py could only
+    ask "did this 30-second segment mention stop loss, and did it contain a
+    percentage" -- which turned "I was 90% sure" into a proposed 90% stop loss.
+    Co-occurrence in a segment is not attribution.
 
     Consumes matched spans so overlapping aliases can't double-count: a
     transcript saying "liquidity sweep" scores `sweep` once, not `sweep` plus
@@ -217,7 +223,7 @@ def match_terms(text: str) -> Dict[str, int]:
     """
     lowered = text.lower()
     consumed = bytearray(len(lowered))
-    hits: Dict[str, int] = {}
+    spans: Dict[str, List[tuple]] = {}
     for term, key in _TERM_INDEX:
         start = 0
         while True:
@@ -232,9 +238,14 @@ def match_terms(text: str) -> Dict[str, int]:
                 if before_ok and after_ok:
                     for j in range(i, end):
                         consumed[j] = 1
-                    hits[key] = hits.get(key, 0) + 1
+                    spans.setdefault(key, []).append((i, end))
             start = end
-    return hits
+    return spans
+
+
+def match_terms(text: str) -> Dict[str, int]:
+    """Concept key -> hit count for `text`."""
+    return {k: len(v) for k, v in match_spans(text).items()}
 
 
 def unmapped_keys() -> List[str]:

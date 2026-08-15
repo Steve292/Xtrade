@@ -54,6 +54,12 @@ class ParamTarget:
     current: Any
     lo: float
     hi: float
+    # "fraction" (0.25 means 25%), "ratio" (3.0 means 3:1), or "count" (bars).
+    # Every parameter in this codebase that is NAMED _pct is stored as a
+    # fraction, which is precisely the trap: a transcript saying "1%" produces
+    # 1.0, and 1.0 is a legal-looking max_stop_pct. Declaring the unit is what
+    # turns that from a silent 100%-stop recommendation into a conversion.
+    unit: str = "fraction"
 
 
 def _build_param_targets() -> Dict[str, ParamTarget]:
@@ -61,22 +67,39 @@ def _build_param_targets() -> Dict[str, ParamTarget]:
     t = _strategy_defaults()
     SC, ST = "bot.screening.ScreenConfig", "bot.smc.strategy.SMCStrategy"
     rows = [
-        ("min_rr", SC, "screening.min_rr", s.get("min_rr"), 0.5, 10.0),
-        ("min_confidence", SC, "screening.min_confidence", s.get("min_confidence"), 0.0, 1.0),
-        ("sniper_confidence", SC, "screening.sniper_confidence", s.get("sniper_confidence"), 0.0, 1.0),
-        ("max_stop_pct", SC, "screening.max_stop_pct", s.get("max_stop_pct"), 0.001, 1.0),
-        ("ote_low", SC, "screening.ote_low", s.get("ote_low"), 0.1, 0.95),
-        ("ote_high", SC, "screening.ote_high", s.get("ote_high"), 0.1, 0.99),
-        ("swing_lookback", SC, "screening.swing_lookback", s.get("swing_lookback"), 2, 100),
-        ("sweep_bars", SC, "screening.sweep_bars", s.get("sweep_bars"), 1, 200),
+        ("min_rr", SC, "screening.min_rr", s.get("min_rr"), 0.5, 10.0, "ratio"),
+        ("min_confidence", SC, "screening.min_confidence", s.get("min_confidence"), 0.2, 0.95, "fraction"),
+        ("sniper_confidence", SC, "screening.sniper_confidence", s.get("sniper_confidence"), 0.2, 0.95, "fraction"),
+        ("max_stop_pct", SC, "screening.max_stop_pct", s.get("max_stop_pct"), 0.002, 0.5, "fraction"),
+        ("ote_low", SC, "screening.ote_low", s.get("ote_low"), 0.1, 0.95, "fraction"),
+        ("ote_high", SC, "screening.ote_high", s.get("ote_high"), 0.1, 0.99, "fraction"),
+        ("swing_lookback", SC, "screening.swing_lookback", s.get("swing_lookback"), 2, 100, "count"),
+        ("sweep_bars", SC, "screening.sweep_bars", s.get("sweep_bars"), 1, 200, "count"),
         ("liquidity_tolerance_pct", SC, "screening.liquidity_tolerance_pct",
-         s.get("liquidity_tolerance_pct"), 0.00001, 0.05),
-        ("reward_risk_ratio", ST, "reward_risk_ratio", t.get("reward_risk_ratio"), 0.5, 10.0),
-        ("order_block_lookback", ST, "order_block_lookback", t.get("order_block_lookback"), 2, 200),
-        ("fvg_min_size_pct", ST, "fvg_min_size_pct", t.get("fvg_min_size_pct"), 0.00001, 0.05),
+         s.get("liquidity_tolerance_pct"), 0.00001, 0.05, "fraction"),
+        ("reward_risk_ratio", ST, "reward_risk_ratio", t.get("reward_risk_ratio"), 0.5, 10.0, "ratio"),
+        ("order_block_lookback", ST, "order_block_lookback", t.get("order_block_lookback"), 2, 200, "count"),
+        ("fvg_min_size_pct", ST, "fvg_min_size_pct", t.get("fvg_min_size_pct"), 0.00001, 0.05, "fraction"),
     ]
-    return {name: ParamTarget(name, owner, path, cur, lo, hi)
-            for name, owner, path, cur, lo, hi in rows if cur is not None}
+    return {name: ParamTarget(name, owner, path, cur, lo, hi, unit)
+            for name, owner, path, cur, lo, hi, unit in rows if cur is not None}
+
+
+def convert_to_param_unit(value: float, family: str, target: ParamTarget):
+    """Value in the quote's unit -> the parameter's unit, or None if unmappable.
+
+    Refuses rather than guesses. A "count" of bars is not a fraction and never
+    becomes one; a ratio is not a percentage. The only real conversion is
+    percent -> fraction, and it is the one that matters: "1%" must reach
+    max_stop_pct as 0.01, not as 1.0.
+    """
+    if family == target.unit:
+        return float(value)
+    if family == "percent" and target.unit == "fraction":
+        return float(value) / 100.0
+    if family == "fraction" and target.unit == "fraction":
+        return float(value)
+    return None
 
 
 PARAM_TARGETS: Dict[str, ParamTarget] = _build_param_targets()
@@ -244,9 +267,17 @@ def build_candidates(store: KnowledgeStore,
                 target = PARAM_TARGETS.get(param) if param else None
                 proposed = None
                 if target and hit.numbers:
-                    for _raw, val in hit.numbers:
-                        if target.lo <= val <= target.hi:
-                            proposed = float(val)
+                    for _raw, val, family in hit.numbers:
+                        # Convert into the parameter's unit FIRST, then range
+                        # check. Range-checking the raw number is what let "1%"
+                        # through as max_stop_pct=1.0: it is inside 0.001-1.0,
+                        # so every downstream validation passed and a 100% stop
+                        # became the top-ranked recommendation in the file.
+                        converted = convert_to_param_unit(val, family, target)
+                        if converted is None:
+                            continue
+                        if target.lo <= converted <= target.hi:
+                            proposed = converted
                             break
                 if param and proposed is None:
                     # A knob with no quoted value in range is not actionable;

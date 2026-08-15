@@ -80,6 +80,9 @@ class KnowledgeConfig:
     segment_seconds: float = 30.0
     segment_max_chars: int = 600
     min_support_videos: int = 2        # one throwaway sentence is not a finding
+    # Stop after this many consecutive video failures. A long streak is one
+    # systemic cause, not bad luck, and continuing worsens a rate-limit.
+    max_consecutive_failures: int = 10
     request_timeout_sec: float = 120.0
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)

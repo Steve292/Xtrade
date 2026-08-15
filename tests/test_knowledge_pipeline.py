@@ -186,6 +186,35 @@ def test_candle_concepts_surface_as_unmapped_gaps():
         assert candle[0].param is None, "nothing in this repo implements candles"
 
 
+class FailingRunner(FakeRunner):
+    """Lists videos fine, then fails every caption/audio fetch — a bot-block."""
+
+    def __call__(self, argv, timeout=120.0, cwd=None):
+        if "--flat-playlist" in argv:
+            return super().__call__(argv, timeout, cwd)
+        self.calls.append(argv)
+        return RunResult(1, "", "ERROR: Sign in to confirm you're not a bot")
+
+
+def test_a_long_failure_streak_aborts_instead_of_hammering():
+    # Observed for real: `seen` climbed 38 -> 131 while `ok` stayed frozen at
+    # 28, because nothing watched for a streak. A hundred consecutive failures
+    # is one systemic cause, and continuing worsens a rate-limit while
+    # producing nothing.
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        cfg, chans = _cfg(tmp), _confirmed(tmp)
+        cfg.max_consecutive_failures = 5
+        cfg.whisper.enabled = False
+        runner = FailingRunner([f"v{i}" for i in range(60)])
+        report = pipeline.ingest(cfg, KnowledgeStore(tmp / "corpus.json"), "yt-dlp",
+                                 channels_path=chans, runner=runner,
+                                 log=lambda *_: None)
+        assert report.aborted, "ran to completion through a total failure streak"
+        assert report.considered <= 8, (
+            f"kept going for {report.considered} videos after everything failed")
+
+
 def test_support_count_is_not_capped_by_the_citation_cap():
     # Regression. Citations are capped at 8 for display, and support_videos
     # used to be derived from them -- so a concept taught in 50 videos reported
