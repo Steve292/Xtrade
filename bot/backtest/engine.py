@@ -145,7 +145,17 @@ class BacktestEngine:
         df: pd.DataFrame,
         htf_df: pd.DataFrame | None = None,
         htf: str = "1h",
+        screener=None,
     ) -> BacktestResult:
+        """screener: an optional bot.screening.TradeScreener.
+
+        Defaults to None, which is the original behaviour exactly -- every
+        signal the strategy produces is taken. Passing one makes the backtest
+        apply the SAME approval gate the live path uses, which is the only way
+        to measure what a gate actually does to profit factor rather than
+        assuming a stricter filter must help. It usually filters out losers
+        AND winners; whether the net is positive is an empirical question.
+        """
         balance = self.initial_balance
         position: dict | None = None
         trades: list[Trade] = []
@@ -202,7 +212,10 @@ class BacktestEngine:
                     htf_window = htf_df.iloc[: max(20, len(htf_df))]
 
                 signal = self.strategy.analyze(window, htf_window)
-                if signal.type != SignalType.NONE:
+                if signal.type != SignalType.NONE and screener is not None:
+                    if not screener.screen(signal, window, htf_window).approved:
+                        signal = None
+                if signal is not None and signal.type != SignalType.NONE:
                     size = calc_position_size(
                         balance, signal.entry, signal.stop_loss, self.risk_pct
                     )

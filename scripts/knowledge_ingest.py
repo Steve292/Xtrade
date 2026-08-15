@@ -154,6 +154,44 @@ def cmd_reextract(args, cfg: KnowledgeConfig) -> int:
     return 0
 
 
+def cmd_verify(args, cfg: KnowledgeConfig) -> int:
+    """Backtest the optional gates against real history.
+
+    The answer to "is this actually true", as opposed to "is this widely
+    taught", which is all the rest of this tool can tell you.
+    """
+    import pandas as pd
+    from bot.backtest.engine import resample_htf
+    from bot.knowledge import verify as verify_mod
+
+    try:
+        df = pd.read_pickle(args.history)
+    except Exception as exc:
+        print(f"Could not read history from {args.history}: {exc}", file=sys.stderr)
+        print("Expected a pickled OHLCV DataFrame "
+              "(timestamp/open/high/low/close/volume).", file=sys.stderr)
+        return 2
+    htf = resample_htf(df, args.htf)
+    print(f"{len(df)} bars  {df.timestamp.min()} -> {df.timestamp.max()}\n")
+
+    gates = ([args.gate] if args.gate else
+             ["require_mitigation", "require_breaker",
+              "require_candle_confirmation", "require_wyckoff",
+              "require_value_area_edge"])
+    strat = {"stop_loss_pct": args.stop_loss_pct} if args.stop_loss_pct else {}
+    out = []
+    for g in gates:
+        try:
+            c = verify_mod.compare_screen_gate(df, htf, g, strategy_kwargs=strat)
+            out.append(c)
+            print(c.report() + "\n")
+        except Exception as exc:
+            print(f"  gate {g}: FAILED {type(exc).__name__}: {exc}\n")
+    print("=" * 66)
+    print(verify_mod.format_summary(out))
+    return 0
+
+
 def cmd_review(args, cfg: KnowledgeConfig) -> int:
     cands = candidates_mod.load()
     if not cands:
@@ -265,6 +303,13 @@ def main() -> int:
         d.add_argument("id")
         d.add_argument("--note", default="")
 
+    v = sub.add_parser("verify")
+    v.add_argument("--history", required=True,
+                   help="pickled OHLCV DataFrame to backtest against")
+    v.add_argument("--htf", default="1h")
+    v.add_argument("--gate", default="", help="one ScreenConfig flag, or all")
+    v.add_argument("--stop-loss-pct", type=float, default=None)
+
     sub.add_parser("stats")
 
     args = p.parse_args()
@@ -283,6 +328,8 @@ def main() -> int:
             return cmd_show(args, cfg)
         if args.cmd in ("accept", "reject", "defer"):
             return cmd_decide(args, cfg)
+        if args.cmd == "verify":
+            return cmd_verify(args, cfg)
         if args.cmd == "stats":
             return cmd_stats(args, cfg)
     except ytdlp.YtDlpMissing as exc:
