@@ -91,13 +91,26 @@ def test_mostly_abstaining_is_flagged_as_weak():
     assert "weaker than it looks" in r.diagnose()
 
 
-def test_wyckoff_is_weighted_below_cross_channel_concepts():
-    # Wyckoff looked like a top-three finding on one channel and collapsed to
-    # 61-of-62-videos-from-one-source once three more were ingested. The weight
-    # has to record that, or single-source vocabulary outvotes replicated ideas.
-    assert consensus.WEIGHTS["wyckoff"] < consensus.WEIGHTS["mitigation"]
-    assert consensus.WEIGHTS["wyckoff"] < consensus.WEIGHTS["candle"]
-    assert consensus.WEIGHTS["mitigation"] == 1.0
+def test_weights_are_ordered_by_evidence_not_frozen_to_values():
+    # Asserts the ORDERING, not specific numbers. Weights are derived from the
+    # corpus (channel breadth x document share) and move whenever it grows --
+    # this test previously pinned mitigation to 1.0 and broke the moment two
+    # more channels showed it was 52%, not near-universal. What must hold is
+    # the relationship: broadly-replicated concepts outweigh narrow ones.
+    W = consensus.WEIGHTS
+    assert W["structure"] == max(W.values()), "structure should be the top weight"
+    assert W["wyckoff"] == min(W.values()), "wyckoff should be the lowest weight"
+    assert W["wyckoff"] < W["mitigation"] < W["structure"]
+    assert W["breaker"] < W["liquidity_sweep"]
+    assert all(0.0 < w <= 1.0 for w in W.values())
+
+
+def test_mitigation_was_downweighted_by_the_wider_corpus():
+    # Recorded deliberately. mitigation was the joint-highest weight on 4-of-4
+    # channel coverage; across 6 channels it is 52% of documents. A concept
+    # scoring 4-of-4 on four similar channels was partly measuring the channel
+    # selection, not the field.
+    assert consensus.WEIGHTS["mitigation"] < 0.8
 
 
 def test_evaluate_runs_every_concept_on_real_shaped_data():

@@ -98,6 +98,10 @@ class ScreenConfig:
     require_premium_discount: bool = False
     require_target_at_level: bool = False
     target_tolerance_pct: float = 0.004
+    # Long below/at VWAP, short above/at it. Buying above the volume-weighted
+    # consensus price is paying more than the average participant.
+    require_vwap_side: bool = False
+    vwap_tolerance_pct: float = 0.002
     # Minimum bot.smc.consensus score (-1..+1). None disables. This is the
     # "approve only what the ingested evidence supports" gate: weights come
     # from cross-channel breadth, so a setup carried by four-educator concepts
@@ -385,6 +389,17 @@ class TradeScreener:
                 ("target sits at " + ("liquidity" if near_pool else "a zone"))
                 if hit else "target is in open air, not at any liquidity or zone",
             ))
+
+        if cfg.require_vwap_side:
+            from bot.smc.volume_profile import at_vwap
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                ok = at_vwap(frame, signal.entry, direction,
+                             tolerance_pct=cfg.vwap_tolerance_pct)
+                res.append((lbl, ok,
+                            "on the right side of VWAP" if ok
+                            else "wrong side of VWAP (or no volume)"))
+            checks.append(self._combine("VWAP side", res))
 
         if cfg.min_consensus_score is not None:
             from bot.smc.consensus import evaluate as consensus_evaluate

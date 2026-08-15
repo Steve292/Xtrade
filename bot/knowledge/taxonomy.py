@@ -249,8 +249,13 @@ _INDICATORS = [
                ["cvd", "cumulative volume delta", "delta divergence", "footprint chart"],
                maps_to="bot.smart_money"),
     # --- not implemented anywhere in this repo ---
+    # Was 3% of the original 329 documents and dismissed as noise. In 101
+    # documents from two channels chosen for methodological similarity it is
+    # 32% -- a jump only visible once the sample was widened, which is the
+    # Wyckoff lesson running the other way.
     ConceptDef("vwap", "vwap", "indicator",
-               ["vwap", "volume weighted average", "anchored vwap", "avwap"]),
+               ["vwap", "volume weighted average", "anchored vwap", "avwap"],
+               maps_to="bot.smc.volume_profile"),
     # "bands" and "squeeze" were aliases here and were almost entirely false
     # positives: 44 of 48 hits across the corpus were the ordinary English verb
     # ("squeeze through the supply zone", "squeeze back up"), which inflated

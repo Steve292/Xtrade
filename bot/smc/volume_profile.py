@@ -172,3 +172,130 @@ def at_value_area_edge(df: pd.DataFrame, price: float,
     if abs(price - profile.value_area_high) <= pad:
         return "high"
     return None
+
+
+# --- VWAP -----------------------------------------------------------------
+#
+# Added after ingesting two channels selected for methodological similarity to
+# the original source. VWAP appeared in 3% of the first 329 documents and was
+# dismissed as noise; in the 101 related-channel documents it appears in 32%.
+# That jump is the single clearest thing the comparison surfaced, and it was
+# invisible until channels were chosen on a different criterion.
+#
+# VWAP answers "what did the average unit of volume actually pay", which is a
+# different question from the profile above. The profile says WHERE business
+# happened across a range; VWAP says what the volume-weighted consensus price
+# is right now, and it moves. Institutions benchmark fills against it, which is
+# why price so often reacts to it.
+#
+# The same tick-volume caveat applies and is worth repeating: on MT5 feeds
+# `volume` is tick_volume, a count of price changes rather than contracts, so a
+# forex VWAP is a proxy. On the CEX side it is genuine.
+
+
+@dataclass
+class VWAPState:
+    vwap: float
+    upper: float          # +n standard deviations
+    lower: float          # -n standard deviations
+    stdev: float
+    anchor_index: int
+    bars: int
+
+    def side(self, price: float, tolerance_pct: float = 0.001) -> str:
+        """'above' | 'below' | 'at' -- where price sits relative to VWAP."""
+        pad = max(abs(price) * tolerance_pct, 1e-12)
+        if price > self.vwap + pad:
+            return "above"
+        if price < self.vwap - pad:
+            return "below"
+        return "at"
+
+
+def typical_price(df: pd.DataFrame) -> pd.Series:
+    """(H+L+C)/3 -- the standard VWAP input, not the close.
+
+    Using the close instead would ignore where the bar actually traded, which
+    is the whole point of a volume-WEIGHTED average.
+    """
+    return (df["high"] + df["low"] + df["close"]) / 3.0
+
+
+def vwap_series(df: pd.DataFrame, anchor_index: int = 0) -> pd.Series | None:
+    """Cumulative VWAP from `anchor_index` forward. None if unusable.
+
+    Anchoring matters more than the formula. A VWAP running from the start of
+    whatever data happened to be fetched is an artifact of the fetch window,
+    not a level anyone is trading against. Anchor it to something real -- a
+    session open, a swing extreme, the start of the current range.
+    """
+    if df is None or len(df) == 0 or "volume" not in df.columns:
+        return None
+    anchor_index = max(0, min(int(anchor_index), len(df) - 1))
+    window = df.iloc[anchor_index:]
+    vol = window["volume"].astype(float)
+    if float(vol.sum()) <= 0:
+        return None
+    tp = typical_price(window)
+    return (tp * vol).cumsum() / vol.cumsum()
+
+
+def vwap_state(df: pd.DataFrame, anchor_index: int = 0,
+               stdevs: float = 2.0) -> VWAPState | None:
+    """Current VWAP plus volume-weighted standard-deviation bands."""
+    series = vwap_series(df, anchor_index)
+    if series is None or len(series) == 0:
+        return None
+    window = df.iloc[max(0, min(int(anchor_index), len(df) - 1)):]
+    vol = window["volume"].astype(float)
+    tp = typical_price(window)
+    current = float(series.iloc[-1])
+    total = float(vol.sum())
+    if total <= 0:
+        return None
+    # Volume-weighted variance about the running VWAP, not a plain std of
+    # price: a plain std would weight a one-lot print the same as the heaviest
+    # bar of the session and produce bands nobody trades.
+    var = float((vol * (tp - series) ** 2).sum() / total)
+    sd = var ** 0.5 if var > 0 else 0.0
+    return VWAPState(vwap=current, upper=current + sd * stdevs,
+                     lower=current - sd * stdevs, stdev=sd,
+                     anchor_index=int(anchor_index), bars=len(window))
+
+
+def anchor_to_recent_extreme(df: pd.DataFrame, lookback: int = 100,
+                             kind: str = "low") -> int:
+    """Index of the most recent swing extreme, for anchoring VWAP to it."""
+    if df is None or len(df) == 0:
+        return 0
+    window = df.iloc[-lookback:] if len(df) > lookback else df
+    offset = len(df) - len(window)
+    col = "low" if kind == "low" else "high"
+    pos = window[col].idxmin() if kind == "low" else window[col].idxmax()
+    try:
+        return int(df.index.get_loc(pos))
+    except Exception:
+        return offset
+
+
+def at_vwap(df: pd.DataFrame, price: float, direction: str,
+            tolerance_pct: float = 0.002,
+            anchor_index: int | None = None,
+            stdevs: float = 2.0) -> bool:
+    """Is `price` on the side of VWAP that `direction` wants?
+
+    Long below/at VWAP, short above/at it -- buying under the volume-weighted
+    consensus price and selling above it. Buying well ABOVE VWAP is paying more
+    than the average participant, which is the entry these educators warn
+    against, so it fails rather than abstains.
+    """
+    if anchor_index is None:
+        anchor_index = anchor_to_recent_extreme(
+            df, kind="low" if direction == "long" else "high")
+    st = vwap_state(df, anchor_index, stdevs)
+    if st is None:
+        return False
+    side = st.side(price, tolerance_pct)
+    if side == "at":
+        return True
+    return side == "below" if direction == "long" else side == "above"

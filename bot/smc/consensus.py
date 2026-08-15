@@ -23,12 +23,13 @@ reading is meaningless when price is trending rather than ranging. Scoring those
 as disagreement would penalise a trade for conditions that were never measurable,
 and a system that cannot say "I don't know" will always find a reason to say no.
 
-WEIGHTS COME FROM CROSS-CHANNEL EVIDENCE, not from conviction. A concept taught
-by four independent educators is weighted above one taught by a single channel,
-because the four-channel signal survived a test the single-channel one failed.
-Wyckoff is the concrete case: it looked like a top-three finding on one channel
-and collapsed to 61-of-62-videos-from-one-source once three more were ingested.
-It is included, at a weight that reflects that.
+WEIGHTS ARE DERIVED FROM THE CORPUS, not chosen. Each is channel breadth times
+document share across 448 documents from 6 independent educators, normalised to
+1.0. They are recomputed whenever the corpus grows, and they have already moved
+once: the original four channels turned out to be more homogeneous than they
+looked, so a concept scoring 4-of-4 there was partly measuring channel selection.
+Every weight except structure fell when two differently-chosen channels were
+added.
 
 NOTHING HERE PLACES A TRADE. It scores and explains; bot/screening.py remains
 the gate.
@@ -47,16 +48,36 @@ ABSTAIN = "abstain"
 # channels-out-of-4 that discussed the concept, from the 329-document corpus.
 # 4/4 concepts weigh most; single-channel concepts weigh least.
 WEIGHTS: dict = {
-    "mitigation": 1.0,        # 4 channels, 183 videos
-    "candle": 1.0,            # 4 channels (candle_close 81v, pin_bar 60v)
-    "structure": 1.0,         # 4 channels (swing 291v, bos)
-    "liquidity_sweep": 1.0,   # 4 channels, 183 videos
-    "supply_demand": 1.0,     # 4 channels, 161 videos
-    "premium_discount": 1.0,  # 4 channels, 164 videos
-    "fibonacci": 0.8,         # 4 channels but thinner, 89 videos
-    "volume_profile": 0.7,    # 3 channels, 115 videos
-    "breaker": 0.7,           # 3 channels, 89 videos
-    "wyckoff": 0.3,           # 2 channels, and 61 of 62 videos are ONE of them
+    # DERIVED, not chosen. weight = (channels discussing it / 6) x (share of
+    # the 448 documents that mention it), normalised so the top concept is 1.0.
+    # Recomputed against the final 6-channel / 2,088,590-word / 207-hour corpus
+    # after two channels selected for methodological similarity were added.
+    #
+    # Every weight fell except structure, and that is the finding: the original
+    # four channels were more homogeneous than they looked, so concepts that
+    # scored 4-of-4 there were partly measuring my channel selection rather
+    # than the field. mitigation is the clearest case -- it was 1.0, the joint
+    # highest, on 4-of-4 coverage; across six channels it is 52% of documents
+    # and drops to 0.58. Still broadly used, no longer treated as near-universal.
+    #
+    # The ratio is what matters, not the scale: the score divides by
+    # participating weight, so this is a weighted average. Structure now
+    # outweighs wyckoff 8:1 where it previously did 3.3:1.
+    #
+    # Wyckoff moved the other way and deserves the correction on the record: it
+    # was 2 channels (61 of 62 videos from one source) and is now 4 channels,
+    # 16% of documents. Still the lowest weight, no longer a single-source
+    # artifact.
+    "structure": 1.00,        # 6 ch, 397 docs, 89%
+    "liquidity_sweep": 0.76,  # 6 ch, 300 docs, 67%
+    "mitigation": 0.58,       # 6 ch, 232 docs, 52%   (was 1.0)
+    "candle": 0.53,           # 6 ch, 210 docs, 47%
+    "premium_discount": 0.46, # 6 ch, 182 docs, 41%
+    "volume_profile": 0.37,   # 5 ch, 178 docs, 40%   (incl. VWAP)
+    "supply_demand": 0.34,    # 5 ch, 162 docs, 36%
+    "fibonacci": 0.29,        # 6 ch, 114 docs, 25%
+    "breaker": 0.18,          # 4 ch, 110 docs, 25%
+    "wyckoff": 0.12,          # 4 ch,  72 docs, 16%
 }
 
 

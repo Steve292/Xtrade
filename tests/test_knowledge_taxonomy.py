@@ -118,7 +118,7 @@ def test_genuinely_unbuilt_concepts_stay_unmapped():
     unmapped = set(taxonomy.unmapped_keys())
     assert unmapped == {
         "inducement", "star_pattern",
-        "vwap", "bollinger", "stochastic", "adx", "divergence",
+        "bollinger", "stochastic", "adx", "divergence",
     }, unmapped
 
 
