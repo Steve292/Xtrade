@@ -123,6 +123,27 @@ def test_assert_writable_refuses_trading_config():
         raise AssertionError(f"assert_writable allowed {name}")
 
 
+def test_assert_writable_refuses_a_symlink_to_trading_config():
+    # An allowed FILENAME that is a symlink to config.yaml passes a name-only
+    # check. Before this, the only thing preventing a clobber was that every
+    # writer happens to use tmp-file + os.replace, which replaces the link
+    # instead of following it -- an accident of the atomic-write pattern, not a
+    # guarantee. One writer using a plain write_text() would go right through.
+    import os
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        cfg = tmp / "config.yaml"
+        cfg.write_text("screening:\n  min_rr: 2.0\n")
+        link = tmp / "corpus.json"
+        os.symlink(cfg, link)
+        try:
+            assert_writable(link)
+        except PermissionError:
+            assert cfg.read_text().startswith("screening:")
+            return
+        raise AssertionError("assert_writable allowed a symlink to config.yaml")
+
+
 def test_assert_writable_allows_knowledge_files():
     for name in ("corpus.json", "knowledge_candidates.json", "knowledge_channels.json"):
         assert assert_writable(Path("/tmp") / name).name == name

@@ -170,15 +170,42 @@ class Document:
 FORBIDDEN_WRITE_NAMES = frozenset({"config.yaml", "config.yml", ".env", ".env.local"})
 
 
+def _refuse(name: str) -> "PermissionError":
+    return PermissionError(
+        f"bot.knowledge refused to write {name}. This package reports rule "
+        "candidates for review; it never edits trading configuration. Make the "
+        "edit yourself (see candidates.format_edit)."
+    )
+
+
 def assert_writable(path: Path) -> Path:
-    """Raise unless `path` is somewhere this package is allowed to write."""
+    """Raise unless `path` is somewhere this package is allowed to write.
+
+    Checks the symlink TARGET as well as the given name. A file called
+    corpus.json that is a symlink to config.yaml passes a name-only check, and
+    the only thing that stopped it clobbering config was that every writer here
+    happens to use the tmp-file + os.replace dance (which replaces the link
+    rather than following it). That is an accident of the atomic-write pattern,
+    not a guarantee -- one future writer using a plain write_text() would go
+    straight through. So resolve it and check both.
+    """
     p = Path(path)
     if p.name.lower() in FORBIDDEN_WRITE_NAMES:
-        raise PermissionError(
-            f"bot.knowledge refused to write {p.name}. This package reports "
-            "rule candidates for review; it never edits trading configuration. "
-            "Make the edit yourself (see candidates.format_edit)."
-        )
+        raise _refuse(p.name)
+
+    # Resolve inside the try, but raise OUTSIDE it. PermissionError subclasses
+    # OSError, so raising in here and catching OSError for broken links would
+    # swallow the refusal itself -- the guard would silently permit exactly the
+    # case it exists to stop.
+    target_name = ""
+    try:
+        if p.is_symlink():
+            target_name = p.resolve().name.lower()
+    except OSError:
+        target_name = ""      # broken link: not a config file, let the write fail normally
+
+    if target_name in FORBIDDEN_WRITE_NAMES:
+        raise _refuse(f"{p.name} -> {target_name}")
     return p
 
 

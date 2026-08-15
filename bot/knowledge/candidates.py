@@ -223,6 +223,14 @@ def build_candidates(store: KnowledgeStore,
 
     # (concept, param, value-bucket) -> accumulating candidate
     bucket: Dict[str, RuleCandidate] = {}
+    # Evidence is counted here, NOT off cand.citations. Citations are capped
+    # for display (nobody reads 50 quotes), and deriving support from them
+    # silently capped every candidate's evidence at that same number -- so a
+    # concept taught in 50 videos reported the same support as one taught in 8,
+    # and the top of the ranking curve was unreachable. Counting is a separate
+    # concern from quoting.
+    seen_videos: Dict[str, set] = {}
+    seen_channels: Dict[str, set] = {}
 
     for doc in docs:
         segments = store.segments(doc.video_id)
@@ -267,6 +275,9 @@ def build_candidates(store: KnowledgeStore,
                     bucket[cid] = cand
                 cand.mention_count += hit.count
                 cand.last_seen_at = now
+                seen_videos.setdefault(cid, set()).add(doc.video_id)
+                seen_channels.setdefault(cid, set()).add(
+                    doc.channel_id or doc.channel_name)
                 if not any(c.video_id == doc.video_id and abs(c.start - hit.start) < 0.5
                            for c in cand.citations):
                     if len(cand.citations) < 8:
@@ -278,9 +289,8 @@ def build_candidates(store: KnowledgeStore,
 
     out = []
     for cand in bucket.values():
-        vids = {c.video_id for c in cand.citations}
-        cand.support_videos = len(vids)
-        cand.support_channels = len({c.channel_name for c in cand.citations})
+        cand.support_videos = len(seen_videos.get(cand.id, ()))
+        cand.support_channels = len(seen_channels.get(cand.id, ()))
         if not cand.citations:
             continue                    # invariant: never emit an uncited claim
         _score(cand, total_channels)

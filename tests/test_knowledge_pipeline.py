@@ -186,6 +186,27 @@ def test_candle_concepts_surface_as_unmapped_gaps():
         assert candle[0].param is None, "nothing in this repo implements candles"
 
 
+def test_support_count_is_not_capped_by_the_citation_cap():
+    # Regression. Citations are capped at 8 for display, and support_videos
+    # used to be derived from them -- so a concept taught in 50 videos reported
+    # support_videos=8, identical to one taught in 8. Since support is both the
+    # heaviest ranking component and the evidence floor, that silently
+    # flattened the top of the ranking.
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        cfg, chans = _cfg(tmp), _confirmed(tmp)
+        store = KnowledgeStore(tmp / "corpus.json")
+        ids = [f"v{i}" for i in range(12)]
+        pipeline.ingest(cfg, store, "yt-dlp", channels_path=chans,
+                        runner=FakeRunner(ids), log=lambda *_: None)
+        cands = pipeline.rebuild_candidates(store, path=tmp / "cands.json")
+        top = max(cands, key=lambda c: c.support_videos)
+        assert top.support_videos == 12, (
+            f"support_videos={top.support_videos}, expected 12 "
+            f"(citations={len(top.citations)})")
+        assert len(top.citations) <= 8, "citation display cap should still hold"
+
+
 def test_human_decisions_survive_a_rebuild():
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
