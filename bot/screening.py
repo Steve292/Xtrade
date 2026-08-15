@@ -104,6 +104,21 @@ class ScreenConfig:
     # scores above one carried by single-source vocabulary.
     min_consensus_score: float | None = None
 
+    # Which frame the CONCEPT gates (8-15) read. Gates 1-7 are unchanged: gate
+    # 2 has always been the higher-timeframe check and stays that way.
+    #
+    #   "ltf"   entry timeframe only -- the original behaviour, and the default
+    #   "htf"   higher timeframe only
+    #   "both"  must hold on BOTH, which is strictly stricter than either
+    #
+    # This existed as a gap rather than a decision: eleven of the twelve gates
+    # only ever looked at the entry frame, so a setup could satisfy every
+    # concept on the 15m while the 1h said the opposite, and nothing noticed.
+    # "both" is the multi-timeframe confirmation the corpus keeps describing as
+    # top-down analysis -- and it is off by default because requiring agreement
+    # on two frames removes trades, which has to be measured, not assumed.
+    gate_timeframe: str = "ltf"
+
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
         return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
@@ -112,6 +127,31 @@ class ScreenConfig:
 class TradeScreener:
     def __init__(self, config: ScreenConfig | None = None):
         self.cfg = config or ScreenConfig()
+
+    def _frames(self, df: pd.DataFrame,
+                htf_df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+        """The frame(s) a concept gate must be satisfied on.
+
+        Returned as (label, frame) so a failure message can name WHICH
+        timeframe disagreed -- "no confirming candle" is far less useful than
+        "no confirming candle on htf".
+        """
+        mode = (self.cfg.gate_timeframe or "ltf").lower()
+        if mode == "htf":
+            return [("htf", htf_df)]
+        if mode == "both":
+            return [("ltf", df), ("htf", htf_df)]
+        return [("ltf", df)]
+
+    @staticmethod
+    def _combine(name: str, results: list[tuple[str, bool, str]]) -> Check:
+        """All frames must agree. Names the frame that failed."""
+        passed = all(ok for _lbl, ok, _d in results)
+        if passed:
+            detail = "; ".join(f"{lbl}: {d}" for lbl, _ok, d in results)
+        else:
+            detail = "; ".join(f"{lbl}: {d}" for lbl, ok, d in results if not ok)
+        return Check(name, passed, detail)
 
     def screen(self, signal: Signal, df: pd.DataFrame, htf_df: pd.DataFrame) -> ScreenResult:
         cfg = self.cfg
@@ -214,51 +254,54 @@ class TradeScreener:
 
         if cfg.require_mitigation:
             from bot.smc.mitigation import active_mitigation
-            m = active_mitigation(df, signal.entry, direction,
-                                  lookback=cfg.swing_lookback * 4)
-            checks.append(Check(
-                "Mitigation", m is not None,
-                f"zone {m.bottom:.4g}-{m.top:.4g} respected "
-                f"(reaction {m.reaction_pct:.2%})" if m
-                else "entry is not in a respected mitigation zone",
-            ))
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                m = active_mitigation(frame, signal.entry, direction,
+                                      lookback=cfg.swing_lookback * 4)
+                res.append((lbl, m is not None,
+                            f"zone {m.bottom:.4g}-{m.top:.4g} respected" if m
+                            else "not in a respected mitigation zone"))
+            checks.append(self._combine("Mitigation", res))
 
         if cfg.require_breaker:
             from bot.smc.breaker import active_breaker
-            b = active_breaker(df, signal.entry, direction,
-                               lookback=cfg.swing_lookback * 4)
-            checks.append(Check(
-                "Breaker", b is not None,
-                f"flipped {b.origin_direction} zone {b.bottom:.4g}-{b.top:.4g}, "
-                f"retested" if b
-                else "entry is not in a retested breaker zone",
-            ))
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                b = active_breaker(frame, signal.entry, direction,
+                                   lookback=cfg.swing_lookback * 4)
+                res.append((lbl, b is not None,
+                            f"retested zone (was {b.origin_direction})" if b
+                            else "not in a retested breaker zone"))
+            checks.append(self._combine("Breaker", res))
 
         if cfg.require_candle_confirmation:
             from bot.smc.candles import confirms
-            p = confirms(df, direction, lookback=cfg.candle_lookback,
-                         min_strength=cfg.candle_min_strength)
-            checks.append(Check(
-                "Candle confirmation", p is not None,
-                f"{p.name} ({p.direction}, strength {p.strength:.2f})" if p
-                else "no confirming candle pattern on the last "
-                     f"{cfg.candle_lookback} bars",
-            ))
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                p = confirms(frame, direction, lookback=cfg.candle_lookback,
+                             min_strength=cfg.candle_min_strength)
+                res.append((lbl, p is not None,
+                            f"{p.name} ({p.direction} {p.strength:.2f})" if p
+                            else "no confirming candle"))
+            checks.append(self._combine("Candle confirmation", res))
 
         if cfg.require_wyckoff:
             from bot.smc.wyckoff import confirms as wyckoff_confirms
-            w = wyckoff_confirms(df, direction)
-            checks.append(Check(
-                "Wyckoff", w is not None,
-                f"{w.bias} range {w.trading_range.low:.4g}-{w.trading_range.high:.4g}, "
-                f"{len(w.events)} event(s)" if w and w.trading_range
-                else "no range, or bias does not agree with the trade",
-            ))
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                w = wyckoff_confirms(frame, direction)
+                res.append((lbl, w is not None,
+                            f"{w.bias}, {len(w.events)} event(s)"
+                            if w and w.trading_range
+                            else "no range or bias disagrees"))
+            checks.append(self._combine("Wyckoff", res))
 
         if cfg.require_value_area_edge:
             from bot.smc.volume_profile import at_value_area_edge
-            edge = at_value_area_edge(df, signal.entry,
-                                      bins=cfg.volume_profile_bins)
+            edge_frames = [(lbl, at_value_area_edge(frame, signal.entry,
+                                                   bins=cfg.volume_profile_bins))
+                           for lbl, frame in self._frames(df, htf_df)]
+            edge = edge_frames[0][1]
             # Long at the LOW edge, short at the HIGH edge. Entering long at the
             # top of the value area is buying the expensive end of fair value,
             # which is the opposite of what the range-deviation trades in the
@@ -315,7 +358,8 @@ class TradeScreener:
 
         if cfg.min_consensus_score is not None:
             from bot.smc.consensus import evaluate as consensus_evaluate
-            cr = consensus_evaluate(df, htf_df, direction, signal.entry)
+            frame = self._frames(df, htf_df)[-1][1]
+            cr = consensus_evaluate(frame, htf_df, direction, signal.entry)
             ok = (cr.verdict != "no_opinion"
                   and cr.score >= cfg.min_consensus_score)
             checks.append(Check(

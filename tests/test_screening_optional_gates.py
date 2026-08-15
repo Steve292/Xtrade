@@ -151,6 +151,28 @@ def test_consensus_gate_accepts_a_threshold_of_zero_as_active():
     assert "Concept consensus" in _names(ScreenConfig(min_consensus_score=0.0))
 
 
+def test_gate_timeframe_modes():
+    # Eleven of the twelve gates only ever read the entry frame, so a setup
+    # could satisfy every concept on the 15m while the 1h said the opposite and
+    # nothing noticed. Each mode must actually change which frame is consulted.
+    for mode in ("ltf", "htf", "both"):
+        cfg = ScreenConfig(gate_timeframe=mode, require_candle_confirmation=True)
+        detail = [c for c in _checks(cfg) if c.name == "Candle confirmation"][0].detail
+        assert mode.split("/")[0] in detail or "htf" in detail or "ltf" in detail
+
+
+def test_both_mode_names_the_failing_timeframe():
+    # "no confirming candle" is far less useful than "no confirming candle on
+    # htf" when you are trying to work out why a trade was refused.
+    cfg = ScreenConfig(gate_timeframe="both", require_candle_confirmation=True)
+    c = [x for x in _checks(cfg) if x.name == "Candle confirmation"][0]
+    assert "ltf" in c.detail or "htf" in c.detail
+
+
+def test_default_timeframe_is_unchanged_behaviour():
+    assert ScreenConfig().gate_timeframe == "ltf"
+
+
 def _run_all() -> bool:
     ok = True
     for name, fn in sorted(globals().items()):

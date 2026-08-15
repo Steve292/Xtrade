@@ -147,6 +147,25 @@ screening:
   # require_wyckoff: true             # range bias (spring/upthrust) must agree with the trade
   # require_value_area_edge: true     # long at the value-area LOW, short at the HIGH
   # volume_profile_bins: 50
+  #
+  # Gates 13-15, added after comparing gate coverage against what the corpus
+  # actually emphasises. take_profit is the SECOND most-discussed concept in
+  # 329 videos (263 videos, 2512 mentions) and had no gate at all -- gate 4
+  # only ever checked the RR ratio, never whether the target sits somewhere
+  # price might reach. That is the same failure as the 20% stop, one step later.
+  # require_premium_discount: true    # long only in discount, short only in premium
+  # require_target_at_level: true     # take-profit must sit at liquidity or a zone
+  # target_tolerance_pct: 0.004
+  # min_consensus_score: 0.25         # weighted vote across all ten concepts
+  #
+  # Which frame the CONCEPT gates read. Gates 1-7 are unaffected; gate 2 has
+  # always been the higher-timeframe check. Eleven of twelve gates previously
+  # read ONLY the entry frame, so a setup could satisfy every concept on the
+  # 15m while the 1h disagreed and nothing noticed. "both" is the top-down
+  # confirmation the corpus keeps describing -- and it removes trades, so
+  # measure before trusting it.
+  #   ltf (default) | htf | both
+  # gate_timeframe: both
 
 # Capital guard — daily-loss / drawdown circuit breaker + concurrent-risk caps.
 # Checked right before a --live order is sent; once halted it blocks new
