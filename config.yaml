@@ -12,7 +12,21 @@ fvg_min_size_pct: 0.001
 liquidity_tolerance_pct: 0.0005
 
 # Risk management
-risk_per_trade_pct: 1.0
+#
+# 35% PER TRADE, set at explicit user request after being shown the arithmetic
+# below. Recorded here so the decision stays visible rather than becoming an
+# unexplained number:
+#     loss 1 -> 65% of deposit remains
+#     loss 2 -> 42%
+#     loss 3 -> 27%
+#     loss 5 -> 12%
+#     90% of the account is gone after 5.3 consecutive losses
+# The account audit (14 Aug 2026) measured a 28-consecutive-loss streak at a
+# 49.5% win rate. capital_guard.max_daily_loss_pct (3%) and max_drawdown_pct
+# (10%) below are the only things standing between this figure and that streak,
+# and they halt trading long before 5 losses -- which is what makes the setting
+# survivable in practice. Do not disable them while this is set.
+risk_per_trade_pct: 35.0
 reward_risk_ratio: 2.0
 max_open_trades: 1
 
@@ -23,7 +37,26 @@ max_open_trades: 1
 # null/omitted keeps the original structural stop (used by backtests,
 # scan.py, and market_snapshot.py's informational second-opinion strategy,
 # none of which read this key).
-stop_loss_pct: 0.20
+# REPLACED by stop_atr_mult below. Kept for reference with the measurement that
+# retired it: at 0.20 on XAUUSDc M15, a short at 4504 placed its stop at 5405
+# and its target at 2702, while gold's ENTIRE range over 5,000 bars (2.5 months)
+# was 3942-4541. The stop sat 864 points above the highest price reached and the
+# target 1,240 below the lowest, so the position could never close -- and with
+# max_open_trades: 1 the bot then never traded again. Backtest over that window:
+# ZERO closed trades. stop_atr_mult takes precedence when both are set.
+# stop_loss_pct: 0.20
+
+# Stop distance as a multiple of ATR(14) -- sized from what the instrument
+# actually moves rather than a fixed percentage of price. Measured on 5,000
+# bars of real XAUUSDc M15:
+#     fixed 20%    0 trades   (unreachable, see above)
+#     structural   129 trades  PF 0.827   ret -4.95%
+#     ATR x3.0      57 trades  PF 0.930   ret -1.94%
+#     ATR x2.0     100 trades  PF 1.074   ret +2.36%   <-- only profitable one
+# 100 trades clears the 30-trade floor bot/knowledge/verify.py requires before
+# it will call anything a result. PF 1.074 over one instrument and 2.5 months is
+# thin, not a proven edge -- it is simply the best of the four, by measurement.
+stop_atr_mult: 2.0
 
 # Staged fixed-dollar risk per trade, overriding risk_per_trade_pct above
 # when enabled — set at explicit user request: $3/trade while combined

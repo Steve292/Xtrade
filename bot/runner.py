@@ -58,6 +58,11 @@ def run_bot(config_path: str = "config.yaml") -> None:
         liquidity_tolerance_pct=config.get("liquidity_tolerance_pct", 0.0005),
         reward_risk_ratio=config.get("reward_risk_ratio", 2.0),
         stop_loss_pct=config.get("stop_loss_pct"),
+        # ATR-sized stop. Takes precedence over stop_loss_pct inside
+        # SMCStrategy when both are set -- a fixed percentage cannot
+        # track what the instrument actually moves, and at 0.20 on gold
+        # it placed stops beyond any price the market reached.
+        stop_atr_mult=config.get("stop_atr_mult"),
     )
     # Same seven-gate screen the Hyperliquid path (hypertrade.py) has always
     # required — this loop previously entered on the raw SMC signal alone

@@ -57,6 +57,7 @@ class SMCStrategy:
         liquidity_tolerance_pct: float = 0.0005,
         reward_risk_ratio: float = 2.0,
         stop_loss_pct: float | None = None,
+        stop_atr_mult: float | None = None,
     ):
         self.swing_lookback = swing_lookback
         self.order_block_lookback = order_block_lookback
@@ -70,6 +71,36 @@ class SMCStrategy:
         # the fixed-percentage stop; backtests/scan.py/market_snapshot.py's
         # informational second-opinion strategy are untouched.
         self.stop_loss_pct = stop_loss_pct
+        # ATR-based stop distance -- sized from what the instrument ACTUALLY
+        # moves, which a fixed percentage cannot be.
+        #
+        # Measured, not assumed: with stop_loss_pct=0.20 on XAUUSDc M15, a
+        # short at 4504 places its stop at 5405 and its target at 2702. Gold's
+        # entire range over 5,000 bars (2.5 months) was 3942-4541, a span of
+        # 599. The stop sat 864 points above the highest price reached and the
+        # target 1,240 below the lowest, so the position could never close --
+        # and with max_open_trades=1 the bot then never traded again. A
+        # backtest over that window produced exactly ZERO closed trades with
+        # the fixed stop, and 23 with structural stops.
+        #
+        # Takes precedence over stop_loss_pct when both are set, because a
+        # percentage that ignores volatility is the bug this fixes.
+        self.stop_atr_mult = stop_atr_mult
+
+
+    def _atr_stop_distance(self, df: pd.DataFrame) -> float | None:
+        """ATR(14) * stop_atr_mult, or None when it cannot be computed."""
+        if self.stop_atr_mult is None:
+            return None
+        try:
+            from bot.position_sizing import atr
+            series = atr(df, period=14)
+            value = float(series.iloc[-1])
+        except Exception:
+            return None
+        if value <= 0 or value != value:      # NaN-safe
+            return None
+        return value * self.stop_atr_mult
 
     def analyze(self, df: pd.DataFrame, htf_df: pd.DataFrame | None = None) -> Signal:
         if len(df) < 50:
@@ -159,7 +190,10 @@ class SMCStrategy:
         if score < 0.55 or entry_zone is None:
             return self._no_signal("Long confluence insufficient")
 
-        if self.stop_loss_pct is not None:
+        atr_dist = self._atr_stop_distance(df)
+        if atr_dist is not None:
+            stop = price - atr_dist
+        elif self.stop_loss_pct is not None:
             stop = price * (1 - self.stop_loss_pct)
         elif hasattr(entry_zone, "bottom"):
             stop = entry_zone.bottom * 0.999
@@ -226,7 +260,10 @@ class SMCStrategy:
         if score < 0.55 or entry_zone is None:
             return self._no_signal("Short confluence insufficient")
 
-        if self.stop_loss_pct is not None:
+        atr_dist = self._atr_stop_distance(df)
+        if atr_dist is not None:
+            stop = price + atr_dist
+        elif self.stop_loss_pct is not None:
             stop = price * (1 + self.stop_loss_pct)
         elif hasattr(entry_zone, "top"):
             stop = entry_zone.top * 1.001
