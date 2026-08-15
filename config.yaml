@@ -104,6 +104,16 @@ screening:
   # require_candle_confirmation: true # a candle must confirm the direction before entry
   # candle_lookback: 3
   # candle_min_strength: 0.0          # raise toward 1.0 to demand a stronger pattern
+  #
+  # Gates 11-12, from the same corpus. Volume profile appears in 84 of 157
+  # videos and Wyckoff in 61, and neither was modelled here until now.
+  # NOTE on forex: bot/mt5/client.py maps MT5's tick_volume to `volume`, and
+  # tick volume counts price CHANGES, not contracts. A value area on EURUSDc is
+  # a proxy; on the CEX side the volume is genuine. Same code, different
+  # confidence.
+  # require_wyckoff: true             # range bias (spring/upthrust) must agree with the trade
+  # require_value_area_edge: true     # long at the value-area LOW, short at the HIGH
+  # volume_profile_bins: 50
 
 # Capital guard — daily-loss / drawdown circuit breaker + concurrent-risk caps.
 # Checked right before a --live order is sent; once halted it blocks new

@@ -81,6 +81,9 @@ class ScreenConfig:
     require_candle_confirmation: bool = False # a candle must confirm the direction
     candle_lookback: int = 3
     candle_min_strength: float = 0.0
+    require_wyckoff: bool = False             # range bias must agree with the trade
+    require_value_area_edge: bool = False     # entry must sit at a value-area edge
+    volume_profile_bins: int = 50
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
@@ -221,6 +224,31 @@ class TradeScreener:
                 f"{p.name} ({p.direction}, strength {p.strength:.2f})" if p
                 else "no confirming candle pattern on the last "
                      f"{cfg.candle_lookback} bars",
+            ))
+
+        if cfg.require_wyckoff:
+            from bot.smc.wyckoff import confirms as wyckoff_confirms
+            w = wyckoff_confirms(df, direction)
+            checks.append(Check(
+                "Wyckoff", w is not None,
+                f"{w.bias} range {w.trading_range.low:.4g}-{w.trading_range.high:.4g}, "
+                f"{len(w.events)} event(s)" if w and w.trading_range
+                else "no range, or bias does not agree with the trade",
+            ))
+
+        if cfg.require_value_area_edge:
+            from bot.smc.volume_profile import at_value_area_edge
+            edge = at_value_area_edge(df, signal.entry,
+                                      bins=cfg.volume_profile_bins)
+            # Long at the LOW edge, short at the HIGH edge. Entering long at the
+            # top of the value area is buying the expensive end of fair value,
+            # which is the opposite of what the range-deviation trades in the
+            # source material do.
+            want = "low" if direction == "long" else "high"
+            checks.append(Check(
+                "Value area edge", edge == want,
+                f"entry at value-area {edge}" if edge
+                else "entry is not at a value-area edge",
             ))
 
         approved = all(c.passed for c in checks)

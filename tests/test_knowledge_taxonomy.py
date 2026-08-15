@@ -117,8 +117,8 @@ def test_genuinely_unbuilt_concepts_stay_unmapped():
     # windows with a dead zone, so listing it as missing was my error.
     unmapped = set(taxonomy.unmapped_keys())
     assert unmapped == {
-        "inducement", "star_pattern", "wyckoff",
-        "vwap", "bollinger", "stochastic", "adx", "volume_profile", "divergence",
+        "inducement", "star_pattern",
+        "vwap", "bollinger", "stochastic", "adx", "divergence",
     }, unmapped
 
 
@@ -147,7 +147,8 @@ def test_indicator_group_splits_implemented_from_missing():
     for key in ("rsi", "macd", "moving_average"):
         assert taxonomy.BY_KEY[key].maps_to == "bot.indicators"
     assert taxonomy.BY_KEY["atr"].maps_to == "bot.position_sizing"
-    assert taxonomy.BY_KEY["volume_profile"].maps_to is None
+    assert taxonomy.BY_KEY["volume_profile"].maps_to == "bot.smc.volume_profile"
+    assert taxonomy.BY_KEY["wyckoff"].maps_to == "bot.smc.wyckoff"
 
 
 def test_indicator_aliases_do_not_match_ordinary_english():

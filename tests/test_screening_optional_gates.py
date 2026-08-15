@@ -59,7 +59,8 @@ def _names(cfg: ScreenConfig) -> list:
 
 def test_defaults_add_no_checks():
     names = _names(ScreenConfig())
-    for added in ("Mitigation", "Breaker", "Candle confirmation"):
+    for added in ("Mitigation", "Breaker", "Candle confirmation",
+                  "Wyckoff", "Value area edge"):
         assert added not in names, f"{added} ran without being enabled: {names}"
 
 
@@ -72,6 +73,8 @@ def test_each_gate_appears_only_when_enabled():
     assert "Breaker" in _names(ScreenConfig(require_breaker=True))
     assert "Candle confirmation" in _names(
         ScreenConfig(require_candle_confirmation=True))
+    assert "Wyckoff" in _names(ScreenConfig(require_wyckoff=True))
+    assert "Value area edge" in _names(ScreenConfig(require_value_area_edge=True))
 
 
 def test_gates_are_independent():
