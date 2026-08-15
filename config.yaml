@@ -91,6 +91,19 @@ screening:
   ote_high: 0.786
   liquidity_tolerance_pct: 0.0005  # equal-high/low tolerance for liquidity pools
   sweep_bars: 20           # a liquidity sweep must be this recent to confirm
+  # Optional gates 8-10, all OFF. Each ADDS a condition, so enabling one can
+  # only ever reject trades the seven-gate screen would have approved -- never
+  # approve one it rejected. That is still a real behaviour change on two armed
+  # accounts, so turn them on ONE AT A TIME and walk-forward before going live.
+  #
+  # Built from the ingested corpus (157 videos / 102 hours): mitigation appears
+  # in 143 of them, breakers in 78, candle-close confirmation in 49 -- and this
+  # codebase modelled none of the three until now.
+  # require_mitigation: true          # entry must sit in a zone price returned to AND respected
+  # require_breaker: true             # entry must sit in a retested, polarity-flipped zone
+  # require_candle_confirmation: true # a candle must confirm the direction before entry
+  # candle_lookback: 3
+  # candle_min_strength: 0.0          # raise toward 1.0 to demand a stronger pattern
 
 # Capital guard — daily-loss / drawdown circuit breaker + concurrent-risk caps.
 # Checked right before a --live order is sent; once halted it blocks new

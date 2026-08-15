@@ -72,6 +72,16 @@ class ScreenConfig:
     liquidity_tolerance_pct: float = 0.0005  # equal-high/low tolerance for pools
     sweep_bars: int = 20  # a liquidity sweep must be this recent to confirm
 
+    # Optional gates 8-10. OFF by default: enabling one adds a check that can
+    # REJECT trades the current seven-gate screen would have approved, which is
+    # a real behaviour change on an armed account. Turn them on deliberately,
+    # one at a time, and walk-forward the result before going live.
+    require_mitigation: bool = False          # entry must sit in a respected zone
+    require_breaker: bool = False             # entry must sit in a retested breaker
+    require_candle_confirmation: bool = False # a candle must confirm the direction
+    candle_lookback: int = 3
+    candle_min_strength: float = 0.0
+
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
         return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
@@ -164,6 +174,53 @@ class TradeScreener:
             checks.append(Check(
                 "Fibonacci OTE (final)", in_zone,
                 f"entry {signal.entry:.4g} vs pocket {lo:.4g}-{hi:.4g}",
+            ))
+
+        # --- OPTIONAL gates 8-10, all OFF by default -------------------------
+        #
+        # These append NOTHING unless explicitly enabled, so `all(c.passed)` is
+        # bit-for-bit unchanged for anyone who does not turn them on. Same
+        # convention as bot/capital_guard.py's newer breakers, and the same
+        # reason: both live accounts are armed against real money, so a new
+        # gate must be opt-in rather than something that silently starts
+        # rejecting or approving trades on the next restart.
+        #
+        # Each corresponds to a concept the ingested educator corpus leaned on
+        # heavily while this codebase had no representation of it at all:
+        # mitigation in 143 of 157 videos, breakers in 78, candle-close
+        # confirmation in 49.
+
+        if cfg.require_mitigation:
+            from bot.smc.mitigation import active_mitigation
+            m = active_mitigation(df, signal.entry, direction,
+                                  lookback=cfg.swing_lookback * 4)
+            checks.append(Check(
+                "Mitigation", m is not None,
+                f"zone {m.bottom:.4g}-{m.top:.4g} respected "
+                f"(reaction {m.reaction_pct:.2%})" if m
+                else "entry is not in a respected mitigation zone",
+            ))
+
+        if cfg.require_breaker:
+            from bot.smc.breaker import active_breaker
+            b = active_breaker(df, signal.entry, direction,
+                               lookback=cfg.swing_lookback * 4)
+            checks.append(Check(
+                "Breaker", b is not None,
+                f"flipped {b.origin_direction} zone {b.bottom:.4g}-{b.top:.4g}, "
+                f"retested" if b
+                else "entry is not in a retested breaker zone",
+            ))
+
+        if cfg.require_candle_confirmation:
+            from bot.smc.candles import confirms
+            p = confirms(df, direction, lookback=cfg.candle_lookback,
+                         min_strength=cfg.candle_min_strength)
+            checks.append(Check(
+                "Candle confirmation", p is not None,
+                f"{p.name} ({p.direction}, strength {p.strength:.2f})" if p
+                else "no confirming candle pattern on the last "
+                     f"{cfg.candle_lookback} bars",
             ))
 
         approved = all(c.passed for c in checks)

@@ -92,13 +92,30 @@ def test_matching_is_case_insensitive():
     assert taxonomy.match_terms("BREAK OF STRUCTURE") == {"bos": 1}
 
 
-def test_candle_patterns_are_present_and_unmapped():
-    # The whole point of the candle group: the repo has no candlestick
-    # detection at all, so these must surface as gaps rather than look wired.
-    unmapped = set(taxonomy.unmapped_keys())
-    for key in ("engulfing", "pin_bar", "doji", "inside_bar", "candle_close"):
+def test_candle_patterns_now_map_to_real_detectors():
+    # This assertion is INVERTED from how it started. The candle group was
+    # added entirely unmapped, and that gap -- 49 of 157 corpus videos using
+    # candle-close confirmation against a repo with no candle code at all --
+    # is what prompted bot/smc/candles.py. Now that the detectors exist, the
+    # taxonomy must say so, or `review --unmapped` keeps reporting a gap that
+    # has been closed.
+    for key in ("engulfing", "pin_bar", "doji", "inside_bar", "outside_bar",
+                "marubozu", "candle_close"):
         assert key in taxonomy.BY_KEY, f"missing candle concept {key}"
-        assert key in unmapped, f"{key} claims a maps_to but no candle code exists"
+        assert taxonomy.BY_KEY[key].maps_to == "bot.smc.candles", key
+
+
+def test_newly_built_zone_detectors_are_mapped():
+    assert taxonomy.BY_KEY["mitigation"].maps_to == "bot.smc.mitigation"
+    assert taxonomy.BY_KEY["breaker"].maps_to == "bot.smc.breaker"
+
+
+def test_genuinely_unbuilt_concepts_stay_unmapped():
+    # Honesty check in the other direction. Multi-candle star/soldier
+    # formations, session kill zones and inducement have no detector, and
+    # marking them mapped would hide real gaps behind a green report.
+    unmapped = set(taxonomy.unmapped_keys())
+    assert unmapped == {"inducement", "killzone", "star_pattern"}, unmapped
 
 
 def test_candle_aliases_match_real_phrasing():

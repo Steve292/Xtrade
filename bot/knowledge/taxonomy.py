@@ -88,9 +88,11 @@ _ZONES = [
                ["fvg", "fair value gap", "imbalance", "inefficiency", "gap", "bisi", "sibi"],
                maps_to="bot.smc.fvg"),
     ConceptDef("breaker", "breaker block", "zone",
-               ["breaker", "breaker block", "flip zone", "mitigation block"]),
+               ["breaker", "breaker block", "flip zone", "mitigation block"],
+               maps_to="bot.smc.breaker"),
     ConceptDef("mitigation", "mitigation", "zone",
-               ["mitigation", "mitigated", "retest", "rebalance"]),
+               ["mitigation", "mitigated", "retest", "rebalance"],
+               maps_to="bot.smc.mitigation"),
 ]
 
 # --- location / pricing --------------------------------------------------
@@ -157,11 +159,13 @@ _RISK = [
 
 # --- candlestick patterns ------------------------------------------------
 #
-# EVERY concept in this group has maps_to=None, and that is a finding, not an
-# oversight: a repo-wide search for engulf/doji/hammer/pin bar/harami/marubozu/
-# morning star/candlestick returns nothing. bot/indicators.py stops at
-# ema/rsi/macd; bot/smc/* reasons about swings, zones and gaps, never about an
-# individual candle's body-to-wick geometry.
+# This group used to be entirely unmapped, and that gap is what prompted
+# bot/smc/candles.py: a repo-wide search for engulf/doji/hammer/pin bar/
+# harami/marubozu returned nothing, so the seven-gate screen could not see a
+# rejection wick or require a close beyond a level. They now map to real
+# detectors. star_pattern stays unmapped -- multi-candle star and soldier
+# formations are genuinely not implemented, and claiming otherwise would put
+# a concept on the 'covered' side of review --unmapped that nothing covers.
 #
 # So the bot currently screens seven gates and none of them can see a rejection
 # wick. Ingesting educator content about candles is therefore guaranteed to
@@ -172,26 +176,33 @@ _RISK = [
 _CANDLES = [
     ConceptDef("engulfing", "engulfing candle", "candle",
                ["engulfing", "engulfing candle", "bullish engulfing", "bearish engulfing",
-                "engulfs", "engulfing bar"]),
+                "engulfs", "engulfing bar"],
+               maps_to="bot.smc.candles"),
     ConceptDef("pin_bar", "pin bar rejection", "candle",
                ["pin bar", "pinbar", "hammer", "inverted hammer", "shooting star",
                 "hanging man", "rejection candle", "rejection wick", "long wick",
-                "wick rejection", "spike"]),
+                "wick rejection", "spike"],
+               maps_to="bot.smc.candles"),
     ConceptDef("doji", "doji indecision", "candle",
-               ["doji", "dragonfly", "gravestone", "indecision candle", "indecision bar"]),
+               ["doji", "dragonfly", "gravestone", "indecision candle", "indecision bar"],
+               maps_to="bot.smc.candles"),
     ConceptDef("inside_bar", "inside bar", "candle",
-               ["inside bar", "inside candle", "harami", "compression bar", "nr7"]),
+               ["inside bar", "inside candle", "harami", "compression bar", "nr7"],
+               maps_to="bot.smc.candles"),
     ConceptDef("outside_bar", "outside bar", "candle",
-               ["outside bar", "outside candle", "expansion candle", "wide range bar"]),
+               ["outside bar", "outside candle", "expansion candle", "wide range bar"],
+               maps_to="bot.smc.candles"),
     ConceptDef("marubozu", "marubozu full body", "candle",
-               ["marubozu", "full body candle", "full bodied candle", "no wick candle"]),
+               ["marubozu", "full body candle", "full bodied candle", "no wick candle"],
+               maps_to="bot.smc.candles"),
     ConceptDef("star_pattern", "star reversal pattern", "candle",
                ["morning star", "evening star", "three white soldiers",
                 "three black crows", "tweezer top", "tweezer bottom"]),
     ConceptDef("candle_close", "candle close confirmation", "candle",
                ["candle close", "body close", "closes above", "closes below",
                 "close confirmation", "wait for the close", "body to wick",
-                "candle body", "displacement candle"]),
+                "candle body", "displacement candle"],
+               maps_to="bot.smc.candles"),
 ]
 
 CONCEPTS: List[ConceptDef] = (
