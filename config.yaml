@@ -156,7 +156,13 @@ knowledge:
     # max_videos_per_run back to single digits for routine incremental runs.
     enabled: true
     model: base
-    max_videos_per_run: 250
+    # Bounded per run, on purpose. 250 turned a single ingest into an
+    # open-ended job, and when YouTube started bot-checking, the run churned
+    # through ~100 videos failing before anyone noticed. 25 is a few hours at
+    # worst, makes real progress on the uncaptioned backlog across repeated
+    # runs, and pairs with max_consecutive_failures so a blocked run stops
+    # early instead of hammering the source.
+    max_videos_per_run: 25
   llm:
     # Optional local ollama pass. It never DETECTS concepts (taxonomy.py does
     # that, deterministically) -- it only proposes a value for a segment that
