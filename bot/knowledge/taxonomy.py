@@ -270,9 +270,44 @@ _INDICATORS = [
                 "rsi divergence", "regular divergence"]),
 ]
 
+# --- Wyckoff, and wicks ---------------------------------------------------
+#
+# Two ideas that sound alike out loud and are completely unrelated, so both are
+# named explicitly rather than left to collide.
+#
+# WYCKOFF is the older framework SMC descends from -- what ICT calls "smart
+# money", Wyckoff called the composite operator. Accumulation and distribution
+# phases, springs, upthrusts, climaxes. Nothing in this repo models any of it.
+#
+# WICK is the candle's high/low excursion beyond its body, and this one IS
+# implemented: bot/smc/candles.py computes upper_wick/lower_wick and reads
+# rejection through detect_pin_bar. Kept separate from pin_bar because a wick
+# is the raw geometry and a pin bar is one interpretation of it -- transcripts
+# say "it wicked into the zone and left" far more often than they name a
+# pattern, and folding the two together would attribute plain wick language to
+# a pattern that was never claimed.
+#
+# Alias hygiene: bare "spring" is deliberately NOT a Wyckoff alias. It is an
+# ordinary English word, and the same mistake with "squeeze" gave bollinger 135
+# phantom mentions across 59 videos. Only "wyckoff spring" is unambiguous.
+_WYCKOFF = [
+    ConceptDef("wyckoff", "wyckoff method", "wyckoff",
+               ["wyckoff", "composite man", "composite operator",
+                "wyckoff accumulation", "wyckoff distribution",
+                "accumulation phase", "distribution phase", "wyckoff spring",
+                "upthrust", "utad", "sign of strength", "sign of weakness",
+                "selling climax", "buying climax", "automatic rally",
+                "secondary test", "re-accumulation", "redistribution"]),
+    ConceptDef("wick", "candle wick", "candle",
+               ["wick", "wicks", "wicked", "candle wick", "upper wick",
+                "lower wick", "wick through", "wicked into", "wick fill",
+                "wicked below", "wicked above"],
+               maps_to="bot.smc.candles"),
+]
+
 CONCEPTS: List[ConceptDef] = (
     _STRUCTURE + _LIQUIDITY + _ZONES + _LOCATION + _TIMING + _RISK
-    + _CANDLES + _INDICATORS
+    + _CANDLES + _INDICATORS + _WYCKOFF
 )
 
 BY_KEY: Dict[str, ConceptDef] = {c.key: c for c in CONCEPTS}

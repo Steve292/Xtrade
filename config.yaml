@@ -151,7 +151,7 @@ knowledge:
   ytdlp_path: "/Users/mac/Projects/smc-trading-bot/venv-knowledge/bin/yt-dlp"
   data_dir: knowledge
   search_limit: 25
-  max_videos_per_channel: 250  # the confirmed channel has ~220
+  max_videos_per_channel: 60   # 3 new channels; 250 each would re-trigger the bot-check
   min_video_seconds: 120       # skip Shorts -- no rule is taught in 45 seconds
   max_video_seconds: 10800
   segment_seconds: 30.0        # concept matching + quoting happen on these chunks

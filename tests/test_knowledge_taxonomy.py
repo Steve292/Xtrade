@@ -117,9 +117,27 @@ def test_genuinely_unbuilt_concepts_stay_unmapped():
     # windows with a dead zone, so listing it as missing was my error.
     unmapped = set(taxonomy.unmapped_keys())
     assert unmapped == {
-        "inducement", "star_pattern",
+        "inducement", "star_pattern", "wyckoff",
         "vwap", "bollinger", "stochastic", "adx", "volume_profile", "divergence",
     }, unmapped
+
+
+def test_wick_is_separate_from_pin_bar():
+    # A wick is raw geometry; a pin bar is one interpretation of it. Transcripts
+    # say "it wicked into the zone and left" far more often than they name a
+    # pattern, and folding them together would attribute plain wick language to
+    # a pattern nobody claimed.
+    assert taxonomy.match_terms("price wicked into the zone") == {"wick": 1}
+    assert "pin_bar" in taxonomy.match_terms("big rejection wick there")
+    assert taxonomy.BY_KEY["wick"].maps_to == "bot.smc.candles"
+
+
+def test_wyckoff_avoids_the_bare_word_spring():
+    # Same failure mode as bollinger's "squeeze": an ordinary English word as
+    # an alias measures the language, not the idea.
+    assert "wyckoff" not in taxonomy.match_terms("prices will spring back quickly")
+    assert "wyckoff" in taxonomy.match_terms("a textbook wyckoff spring here")
+    assert "wyckoff" in taxonomy.match_terms("the composite man is accumulating")
 
 
 def test_indicator_group_splits_implemented_from_missing():

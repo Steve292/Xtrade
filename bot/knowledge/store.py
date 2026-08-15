@@ -35,7 +35,7 @@ SCHEMA_VERSION = 1
 # downloaded transcripts, so `--reextract` can rebuild the whole corpus with
 # zero network calls. Bump it whenever taxonomy.py or extract.py changes in a
 # way that would produce different concepts from the same text.
-EXTRACTOR_VERSION = 2
+EXTRACTOR_VERSION = 3
 
 
 @dataclass
