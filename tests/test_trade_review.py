@@ -167,15 +167,46 @@ def test_runner_has_no_second_no_signal_gate():
     )
 
 
-def test_gates_are_advisory_in_config():
-    """The eight optional gates run as indicators, not vetoes."""
+def test_gates_are_binding_and_all_armed():
+    """The eight optional gates are BINDING, and all of them are on.
+
+    Approved on the decomposed evidence: holding trade direction constant the
+    gates separate PF 1.107 (approved) from 0.908 (dissented), and dissent
+    flips expectancy from +21.8 to -13.7. The earlier aggregate reading that
+    made them advisory was measuring the direction effect, not the gates.
+    """
     import yaml
 
     root = Path(__file__).resolve().parents[1]
     cfg = yaml.safe_load((root / "config.yaml").read_text())
-    assert cfg["screening"].get("advisory_only") is True, (
-        "screening.advisory_only must stay true: the veto is the only gate "
-        "allowed to stop a trade"
+    scr = cfg["screening"]
+    assert scr.get("advisory_only") is False, (
+        "gates are binding: advisory_only must be false"
+    )
+    for gate in ("require_mitigation", "require_breaker",
+                 "require_candle_confirmation", "require_wyckoff",
+                 "require_value_area_edge", "require_vwap_side",
+                 "require_premium_discount", "require_target_at_level"):
+        assert scr.get(gate) is True, f"{gate} must stay armed"
+
+
+def test_veto_remains_enforced_regardless_of_gate_mode():
+    """The veto is enforced whatever the gates do.
+
+    Gates binding or advisory, nothing may trade without the veto allowing it
+    first. This is the invariant that survives every change to gate policy.
+    """
+    src = (Path(__file__).resolve().parents[1] / "bot/runner.py").read_text()
+    assert "verdict = trade_review.review(" in src
+    assert "if not verdict.allowed:" in src
+    # the veto's skip must precede, and not depend on, any gate-mode logic
+    veto = src.index("if not verdict.allowed:")
+    advisory = src.index("advisory = getattr(screener.cfg")
+    assert veto < advisory, "the veto must be evaluated first"
+    code = "\n".join(ln.split("#", 1)[0]
+                     for ln in src[veto:advisory].splitlines())
+    assert "continue" in code and "advisory" not in code, (
+        "the veto's skip must be unconditional"
     )
 
 

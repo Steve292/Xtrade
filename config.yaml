@@ -188,12 +188,12 @@ screening:
   # Honest limits: ~143 trades survive all gates, the second-half margin is thin
   # (1.115 vs 1.102), and exits are the account's real exits, not the bot's.
   #
-  # ADVISORY: the gates below are INDICATORS. They all run, they all report, and
-  # none of them can stop a trade. The abstention veto in bot/trade_review.py is
-  # the only thing that fires or blocks.
+  # GATES ARE BINDING. The veto still decides whether a setup exists at all and
+  # is still the only thing that can start a trade -- nothing past it fires
+  # without the veto -- but past that point these gates can and do reject.
   #
-  # Bootstrap CIs over the same 3,547 positions are why. No gated configuration
-  # could be told apart from a losing one:
+  # This was briefly set to advisory on the strength of the aggregate CIs below,
+  # which showed no gated configuration separable from a losing one:
   #
   #   cohort                  n     win%   PF     PF 95% CI        exp/trade
   #   veto only             600    57.5%  1.538  [1.083, 2.203]      73.1
@@ -201,15 +201,30 @@ screening:
   #   veto + best half      141    41.1%  1.093  [0.593, 1.862]      18.8
   #   veto + all gates      143    41.3%  1.123  [0.621, 1.924]      25.5
   #
-  # Every gated interval contains PF < 1.0, and veto+best-half's expectancy is
-  # +18.78 +/- 122.71 -- not distinguishable from zero. The gates moved PF by
-  # +0.03..0.06 while cutting the sample from 600 to ~141: they multiplied the
-  # uncertainty without moving the estimate.
+  # That aggregate reading was CONFOUNDED, and decomposing it is what reversed
+  # the decision. Splitting the fired cohort by whether the bot's own direction
+  # matched the direction actually traded:
   #
-  # Set to false to make the gates binding again. Nothing else changes: the
-  # checks, their reasons and ScreenResult.approved are identical either way,
-  # only whether bot/runner.py honours the verdict.
-  advisory_only: true
+  #   cohort                          n     win%       net      PF
+  #   direction MATCHED             171    38.6%    +2,872   1.086
+  #     gates approved              147    40.1%    +3,201   1.107
+  #     gates dissented              24    29.2%      -329   0.908
+  #   direction OPPOSED             495    65.9%   +48,487   1.985
+  #
+  # Holding direction constant the gates ADD value: 1.107 approved vs 0.908
+  # dissented, and dissent flips expectancy negative (+21.8 -> -13.7). The
+  # "gates look useless" reading was measuring the DIRECTION effect, not them.
+  #
+  # It also kills the headline number as a forecast. 74% of what the veto fires
+  # on is trades where the bot wanted the OPPOSITE side, carrying +48,487 of the
+  # +51,358 -- that P&L belongs to whoever took the other side. The bot's own
+  # matched cohort is 171 trades at PF 1.086, barely above break-even, and that
+  # is the honest proxy for this bot trading its own signals.
+  #
+  # Known weakness, on the record: the dissent sample is 24 trades. That is thin
+  # enough that this should be re-measured as gated trades accumulate --
+  # scripts/gate_split.py re-runs the whole comparison.
+  advisory_only: false
   require_mitigation: true          # entry must sit in a zone price returned to AND respected
   require_breaker: true             # entry must sit in a retested, polarity-flipped zone
   require_candle_confirmation: true # a candle must confirm the direction before entry

@@ -1,0 +1,164 @@
+#!/usr/bin/env python
+"""Continuous knowledge ingestion with adaptive backoff.
+
+    python scripts/knowledge_daemon.py                 # run forever
+    python scripts/knowledge_daemon.py --once          # a single cycle
+    python scripts/knowledge_daemon.py --status        # read the state file
+
+WHY THIS IS NOT A SLEEP LOOP
+----------------------------
+YouTube rate-limits this IP. Three consecutive manual runs went 96 videos
+ingested -> 13 -> 0, each ending in the pipeline's own circuit breaker
+("10 consecutive failures ... stopping rather than hammering the source").
+A fixed-interval loop would keep walking into that and make it worse -- the
+failure mode of a naive ingester is getting the address blocked outright.
+
+So the interval responds to what actually happened:
+
+    ingested new material   -> BASE interval (6h)
+    nothing new, no abort   -> BASE x 2, the corpus is simply current
+    rate-limited (ABORTED)  -> exponential backoff, 1h -> 2 -> 4 -> 8 -> 12h cap
+
+Backoff resets the moment a cycle ingests anything. State lives in
+knowledge_daemon_state.json next to the corpus, so a restart does not reset
+the backoff and start hammering again from zero.
+
+The ingest itself is unchanged and still incremental: re-running only fetches
+what is new, human channel confirmations still gate what may be touched, and
+nothing here writes trading config.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+STATE = ROOT / "knowledge_daemon_state.json"
+LOG = ROOT / "logs" / "knowledge-daemon.log"
+
+BASE_HOURS = 6.0
+BACKOFF_START_HOURS = 1.0
+BACKOFF_MAX_HOURS = 12.0
+MIN_INTERVAL_HOURS = 0.5   # hard floor; nothing may schedule tighter than this
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def log(msg: str) -> None:
+    line = f"{_now()}  {msg}"
+    print(line, flush=True)
+    try:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        with LOG.open("a") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
+
+
+def load_state() -> dict:
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return {"backoff_hours": 0.0, "cycles": 0, "last_run": None,
+                "last_result": None, "total_ingested": 0}
+
+
+def save_state(s: dict) -> None:
+    try:
+        STATE.write_text(json.dumps(s, indent=2))
+    except OSError as exc:
+        log(f"WARN could not write state: {exc}")
+
+
+def run_cycle(python: str) -> dict:
+    """One ingest pass. Returns a parsed summary; never raises."""
+    cmd = [python, str(ROOT / "scripts" / "knowledge_ingest.py"), "ingest"]
+    try:
+        p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
+                           timeout=60 * 90)
+        out = (p.stdout or "") + (p.stderr or "")
+    except subprocess.TimeoutExpired:
+        return {"ingested": 0, "aborted": True, "reason": "timeout after 90m"}
+    except Exception as exc:                      # noqa: BLE001 - must not die
+        return {"ingested": 0, "aborted": True, "reason": f"{type(exc).__name__}: {exc}"}
+
+    aborted = "ABORTED" in out
+    ingested = 0
+    m = re.search(r"ingested=(\d+)", out)
+    if m:
+        ingested = int(m.group(1))
+    considered = 0
+    m2 = re.search(r"considered=(\d+)", out)
+    if m2:
+        considered = int(m2.group(1))
+    cands = None
+    m3 = re.search(r"candidates: (\d+) above", out)
+    if m3:
+        cands = int(m3.group(1))
+    return {"ingested": ingested, "considered": considered, "aborted": aborted,
+            "candidates": cands, "reason": "rate-limited" if aborted else "ok"}
+
+
+def next_interval(res: dict, state: dict) -> float:
+    """Hours until the next cycle, and update the backoff in `state`."""
+    if res["aborted"]:
+        cur = state.get("backoff_hours", 0.0) or 0.0
+        nxt = BACKOFF_START_HOURS if cur <= 0 else min(cur * 2, BACKOFF_MAX_HOURS)
+        state["backoff_hours"] = nxt
+        return max(nxt, MIN_INTERVAL_HOURS)
+    # a clean cycle clears the penalty
+    state["backoff_hours"] = 0.0
+    if res["ingested"] > 0:
+        return BASE_HOURS
+    return BASE_HOURS * 2      # nothing new; the corpus is current
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--once", action="store_true", help="one cycle, then exit")
+    ap.add_argument("--status", action="store_true", help="print state and exit")
+    ap.add_argument("--python", default=str(Path(sys.executable)),
+                    help="interpreter used to run the ingest")
+    a = ap.parse_args()
+
+    if a.status:
+        s = load_state()
+        print(json.dumps(s, indent=2))
+        return 0
+
+    log(f"daemon start (base={BASE_HOURS}h, backoff cap={BACKOFF_MAX_HOURS}h)")
+    while True:
+        state = load_state()
+        state["cycles"] = state.get("cycles", 0) + 1
+        state["last_run"] = _now()
+
+        res = run_cycle(a.python)
+        state["last_result"] = res
+        state["total_ingested"] = state.get("total_ingested", 0) + res["ingested"]
+
+        wait = next_interval(res, state)
+        save_state(state)
+
+        log(f"cycle {state['cycles']}: ingested={res['ingested']} "
+            f"considered={res.get('considered', 0)} "
+            f"candidates={res.get('candidates')} "
+            f"{'RATE-LIMITED' if res['aborted'] else 'ok'} "
+            f"-> next in {wait:.1f}h "
+            f"(cumulative {state['total_ingested']})")
+
+        if a.once:
+            return 0
+        time.sleep(wait * 3600)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
