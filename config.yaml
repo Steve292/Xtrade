@@ -157,19 +157,41 @@ screening:
   ote_high: 0.786
   liquidity_tolerance_pct: 0.0005  # equal-high/low tolerance for liquidity pools
   sweep_bars: 20           # a liquidity sweep must be this recent to confirm
-  # Optional gates 8-10, all OFF. Each ADDS a condition, so enabling one can
-  # only ever reject trades the seven-gate screen would have approved -- never
-  # approve one it rejected. That is still a real behaviour change on two armed
-  # accounts, so turn them on ONE AT A TIME and walk-forward before going live.
+  # Optional gates 8-15 are now ON, as a SET. Each ADDS a condition, so they can
+  # only reject trades the seven-gate screen would have approved -- never approve
+  # one it rejected. Turning them on is therefore the conservative direction.
   #
-  # Built from the ingested corpus (157 videos / 102 hours): mitigation appears
-  # in 143 of them, breakers in 78, candle-close confirmation in 49 -- and this
-  # codebase modelled none of the three until now.
-  # require_mitigation: true          # entry must sit in a zone price returned to AND respected
-  # require_breaker: true             # entry must sit in a retested, polarity-flipped zone
-  # require_candle_confirmation: true # a candle must confirm the direction before entry
-  # candle_lookback: 3
-  # candle_min_strength: 0.0          # raise toward 1.0 to demand a stronger pattern
+  # The instruction above used to read "turn them on ONE AT A TIME and
+  # walk-forward before going live". The walk-forward has now been done, over
+  # all 3,547 closed positions from the live MT5 account, and it says the
+  # opposite: individually they FAIL, and only the full set holds.
+  # (scripts/gate_split.py, chronological split, PF vs the shipped baseline)
+  #
+  #   configuration                     full     1st half    2nd half   verdict
+  #   shipped baseline                  1.063      0.996       1.102     --
+  #   + broad gates only  (A)           0.964      0.636       1.133     FAILS
+  #   + narrow gates only (B)           1.093      1.088       1.095     FAILS
+  #   + BOTH                            1.123      1.141       1.115     HOLDS
+  #
+  # The gates were split by CORPUS BREADTH -- how many independent educators
+  # teach each concept, per bot/smc/consensus.py WEIGHTS. Group A is the widely
+  # taught half (target_at_level 0.77, candle 0.64, premium_discount 0.46);
+  # group B the narrowly taught half (mitigation 0.40, value_area 0.30, vwap
+  # 0.30, breaker 0.15, wyckoff 0.13).
+  #
+  # The result is the finding: breadth did NOT predict edge. The gates the field
+  # teaches MOST made things worse on their own (PF 1.063 -> 0.964, +1,887 ->
+  # -1,131). docs/KNOWLEDGE.md always said ranking measures how widely something
+  # is taught and never whether it works -- this is the first measurement of
+  # that claim, and it came back inverted.
+  #
+  # Honest limits: ~143 trades survive all gates, the second-half margin is thin
+  # (1.115 vs 1.102), and exits are the account's real exits, not the bot's.
+  require_mitigation: true          # entry must sit in a zone price returned to AND respected
+  require_breaker: true             # entry must sit in a retested, polarity-flipped zone
+  require_candle_confirmation: true # a candle must confirm the direction before entry
+  candle_lookback: 3
+  candle_min_strength: 0.0          # raise toward 1.0 to demand a stronger pattern
   #
   # Gates 11-12, from the same corpus. Volume profile appears in 84 of 157
   # videos and Wyckoff in 61, and neither was modelled here until now.
@@ -177,18 +199,23 @@ screening:
   # tick volume counts price CHANGES, not contracts. A value area on EURUSDc is
   # a proxy; on the CEX side the volume is genuine. Same code, different
   # confidence.
-  # require_wyckoff: true             # range bias (spring/upthrust) must agree with the trade
-  # require_value_area_edge: true     # long at the value-area LOW, short at the HIGH
-  # volume_profile_bins: 50
+  require_wyckoff: true             # range bias (spring/upthrust) must agree with the trade
+  require_value_area_edge: true     # long at the value-area LOW, short at the HIGH
+  require_vwap_side: true           # entry on the correct side of VWAP
+  vwap_tolerance_pct: 0.002
+  volume_profile_bins: 50
   #
   # Gates 13-15, added after comparing gate coverage against what the corpus
   # actually emphasises. take_profit is the SECOND most-discussed concept in
   # 329 videos (263 videos, 2512 mentions) and had no gate at all -- gate 4
   # only ever checked the RR ratio, never whether the target sits somewhere
   # price might reach. That is the same failure as the 20% stop, one step later.
-  # require_premium_discount: true    # long only in discount, short only in premium
-  # require_target_at_level: true     # take-profit must sit at liquidity or a zone
-  # target_tolerance_pct: 0.004
+  require_premium_discount: true    # long only in discount, short only in premium
+  require_target_at_level: true     # take-profit must sit at liquidity or a zone
+  target_tolerance_pct: 0.004
+  # min_consensus_score stays OFF: it was not part of the split that was
+  # measured, and an unmeasured gate is exactly what the walk-forward above
+  # exists to prevent.
   # min_consensus_score: 0.25         # weighted vote across all ten concepts
   #
   # Which frame the CONCEPT gates read. Gates 1-7 are unaffected; gate 2 has
