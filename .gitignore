@@ -43,6 +43,11 @@ knowledge_candidates.json
 # and would silently exclude this feature's entire source tree from the repo.
 /knowledge/
 
+# scripts/replay_mt5.py working directory: the exported MT5 deal history holds
+# real account numbers, balances and tickets, alongside cached OHLCV. Local
+# only, never shared. Same reasoning as the knowledge corpus above.
+/var/
+
 # Stray machine-local files that ended up in the repo root, not project data
 bugreport-sdk_gphone64_arm64-*.zip
 msedgewebview2.dxvk-cache
