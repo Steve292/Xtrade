@@ -64,7 +64,8 @@ _LIQUIDITY = [
                 "sweeps liquidity", "grabs liquidity"],
                maps_to="bot.smart_money"),
     ConceptDef("inducement", "inducement", "liquidity",
-               ["inducement", "ide", "bait", "trap", "engineered liquidity"]),
+               ["inducement", "ide", "bait", "trap", "engineered liquidity"],
+               maps_to="bot.smc.inducement"),
 ]
 
 # --- zones ---------------------------------------------------------------
@@ -269,18 +270,22 @@ _INDICATORS = [
     # this to 135 mentions across 59 videos and made an indicator nobody uses
     # look like a major gap. Only unambiguous names survive.
     ConceptDef("bollinger", "bollinger bands", "indicator",
-               ["bollinger", "bollinger band", "keltner channel"]),
+               ["bollinger", "bollinger band", "keltner channel"],
+               maps_to="bot.indicators"),
     ConceptDef("stochastic", "stochastic oscillator", "indicator",
-               ["stochastic", "stoch", "stoch rsi", "%k", "%d"]),
+               ["stochastic", "stoch", "stoch rsi", "%k", "%d"],
+               maps_to="bot.indicators"),
     ConceptDef("adx", "average directional index", "indicator",
-               ["adx", "directional index", "dmi", "trend strength indicator"]),
+               ["adx", "directional index", "dmi", "trend strength indicator"],
+               maps_to="bot.indicators"),
     ConceptDef("volume_profile", "volume profile", "indicator",
                ["volume profile", "poc", "point of control", "value area",
                 "high volume node", "low volume node", "hvn", "lvn"],
                maps_to="bot.smc.volume_profile"),
     ConceptDef("divergence", "indicator divergence", "indicator",
                ["bullish divergence", "bearish divergence", "hidden divergence",
-                "rsi divergence", "regular divergence"]),
+                "rsi divergence", "regular divergence"],
+               maps_to="bot.indicators"),
 ]
 
 # --- Wyckoff, and wicks ---------------------------------------------------

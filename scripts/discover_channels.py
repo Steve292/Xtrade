@@ -61,6 +61,30 @@ QUERIES = [
     "forex trading full course",
     "crypto trading technical analysis course",
     "backtesting trading strategy statistics",
+    # Second sweep. The first twenty were mined out -- repeating them returns
+    # the same roster. These deliberately probe adjacent vocabulary and the
+    # quantitative/institutional end, where the language differs enough to
+    # surface channels the SMC-flavoured queries never reach.
+    "inducement liquidity engineering trading",
+    "institutional trading desk order execution",
+    "quantitative trading strategy python",
+    "futures trading emini scalping strategy",
+    "options flow gamma exposure trading",
+    "trend following systematic trading",
+    "mean reversion statistical arbitrage",
+    "market profile TPO auction theory",
+    "elliott wave theory trading",
+    "harmonic patterns gartley butterfly trading",
+    "session open range breakout strategy",
+    "multi timeframe analysis top down trading",
+    "trade journaling review process",
+    "prop firm funded trader challenge strategy",
+    "indicator divergence RSI MACD trading",
+    "moving average strategy trading system",
+    "chart patterns triangles flags trading",
+    "commodity gold oil trading analysis",
+    "central bank interest rate forex fundamentals",
+    "algorithmic trading bot development",
 ]
 
 

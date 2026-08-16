@@ -120,16 +120,21 @@ def test_genuinely_unbuilt_concepts_stay_unmapped():
     reading it, which is worse than not having it.
     """
     unmapped = set(taxonomy.unmapped_keys())
-    # No detector exists for any of these. inducement is now the largest gap
-    # by corpus support: 115 of 639 documents (18%) across 8 channels.
-    for key in ("inducement", "bollinger", "stochastic", "adx", "divergence"):
+    # What remains unmapped is no longer a matter of unwritten detectors. Every
+    # concept computable from an OHLC frame now has one. These four need a
+    # news / social / market-cap FEED, and no amount of price maths substitutes
+    # for data this machine does not receive -- see
+    # test_stub_backed_concepts_are_not_treated_as_implemented.
+    for key in ("narrative", "catalyst", "tokenomics", "social_sentiment"):
         assert key in unmapped, f"{key} claims code that does not exist"
-    # These are backed by real modules and must NOT appear as gaps.
-    # star_pattern joined this list when detect_star / detect_three_soldiers /
-    # detect_tweezer were written -- the third time this test has legitimately
-    # moved a key, after vwap and the narrative group.
+    # Backed by real modules; must NOT appear as gaps. star_pattern joined when
+    # the multi-candle detectors were written; inducement, bollinger,
+    # stochastic, adx and divergence joined with bot/smc/inducement.py and the
+    # indicator additions. Each move was a real implementation landing, which
+    # is exactly the churn this test's docstring says to expect.
     for key in ("mitigation", "breaker", "volume_profile", "vwap", "wyckoff",
-                "killzone", "meme_season", "star_pattern"):
+                "killzone", "meme_season", "star_pattern", "inducement",
+                "bollinger", "stochastic", "adx", "divergence"):
         assert key not in unmapped, f"{key} is implemented but reported as a gap"
 
 
