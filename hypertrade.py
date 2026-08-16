@@ -142,6 +142,7 @@ def main() -> None:
         liquidity_tolerance_pct=cfg.get("liquidity_tolerance_pct", 0.0005),
         reward_risk_ratio=cfg.get("reward_risk_ratio", 2.0),
         stop_loss_pct=cfg.get("stop_loss_pct"),
+        stop_atr_mult=cfg.get("stop_atr_mult"),
     )
     screener = TradeScreener(ScreenConfig.from_dict(cfg.get("screening", {})))
     # Staged fixed-dollar risk (config.yaml's fixed_risk_usd) overrides
