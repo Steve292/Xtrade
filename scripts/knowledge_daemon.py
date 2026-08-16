@@ -107,6 +107,35 @@ def run_cycle(python: str) -> dict:
             "candidates": cands, "reason": "rate-limited" if aborted else "ok"}
 
 
+def sync_weights(python: str) -> dict:
+    """Push a grown corpus into the derived weights, gated on tests.
+
+    This is the ONLY thing that carries ingested knowledge across into code
+    that runs. Transcripts alone change nothing -- the corpus is gitignored and
+    nothing on the execute path reads it. So the crossing is automated here,
+    and sync_weights.py refuses to commit unless the weights actually moved and
+    the tests still pass afterwards. It never pushes and never merges.
+    """
+    cmd = [python, str(ROOT / "scripts" / "sync_weights.py"),
+           "--apply", "--commit"]
+    try:
+        p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
+                           timeout=60 * 30)
+        out = (p.stdout or "") + (p.stderr or "")
+    except Exception as exc:                      # noqa: BLE001
+        return {"changed": False, "note": f"{type(exc).__name__}: {exc}"}
+
+    if "Nothing to do" in out:
+        return {"changed": False, "note": "no drift"}
+    if "TESTS FAILED" in out:
+        return {"changed": False, "note": "TESTS FAILED — weights reverted"}
+    if "committed to the current branch" in out:
+        moved = re.findall(r"^\s{2}(\w+)\s+[\d.-]+\s*->\s*([\d.]+)", out, re.M)
+        return {"changed": True,
+                "note": "committed: " + ", ".join(f"{k}->{v}" for k, v in moved[:6])}
+    return {"changed": False, "note": out.strip().splitlines()[-1][:120] if out.strip() else "no output"}
+
+
 def next_interval(res: dict, state: dict) -> float:
     """Hours until the next cycle, and update the backoff in `state`."""
     if res["aborted"]:
@@ -145,6 +174,15 @@ def main() -> int:
         state["last_result"] = res
         state["total_ingested"] = state.get("total_ingested", 0) + res["ingested"]
 
+        # Only when the corpus actually grew. Re-deriving against an unchanged
+        # corpus produces identical weights and would just add noise.
+        if res["ingested"] > 0:
+            sync = sync_weights(a.python)
+            state["last_weight_sync"] = sync
+            log(f"  weight sync: {sync['note']}")
+            if sync["changed"]:
+                state["weight_updates"] = state.get("weight_updates", 0) + 1
+
         wait = next_interval(res, state)
         save_state(state)
 
@@ -153,7 +191,8 @@ def main() -> int:
             f"candidates={res.get('candidates')} "
             f"{'RATE-LIMITED' if res['aborted'] else 'ok'} "
             f"-> next in {wait:.1f}h "
-            f"(cumulative {state['total_ingested']})")
+            f"(cumulative {state['total_ingested']}, "
+            f"weight updates {state.get('weight_updates', 0)})")
 
         if a.once:
             return 0
