@@ -57,3 +57,7 @@ bugreport-sdk_gphone64_arm64-*.zip
 msedgewebview2.dxvk-cache
 settings.dat
 pending_trades.json
+
+# walk_forward.py evaluation ledger: machine-local measurements against a
+# specific account history, not shared state.
+/walk_forward_ledger.json

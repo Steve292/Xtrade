@@ -136,6 +136,37 @@ def sync_weights(python: str) -> dict:
     return {"changed": False, "note": out.strip().splitlines()[-1][:120] if out.strip() else "no output"}
 
 
+def walk_forward(python: str) -> dict:
+    """Re-test candidate configurations against real MT5 history.
+
+    Runs after new knowledge lands so a grown corpus is MEASURED against real
+    outcomes rather than assumed to help. Reports only -- promotion still
+    requires clearing the four gates in walk_forward.py, and every rejection is
+    written to the ledger alongside the passes. A search that records only its
+    winners is how overfitting comes to look like progress.
+    """
+    script = ROOT / "scripts" / "walk_forward.py"
+    if not (ROOT / "var" / "mt5" / "gate_split.json").exists():
+        return {"ran": False, "note": "no replay data yet"}
+    try:
+        p = subprocess.run([python, str(script), "--report"], cwd=ROOT,
+                           capture_output=True, text=True, timeout=60 * 20)
+        out = (p.stdout or "") + (p.stderr or "")
+    except Exception as exc:                      # noqa: BLE001
+        return {"ran": False, "note": f"{type(exc).__name__}: {exc}"}
+
+    best = re.search(r"best win rate found\s*:\s*([\d.]+)% on (\d+)", out)
+    target = re.search(r"reaching [\d.]+% target\s*:\s*(\S+)", out)
+    passing = re.search(r"passing the full gate\s*:\s*(\d+)", out)
+    return {
+        "ran": True,
+        "best_win": float(best.group(1)) if best else None,
+        "best_n": int(best.group(2)) if best else None,
+        "passing": int(passing.group(1)) if passing else 0,
+        "target_met": bool(target and target.group(1).startswith("YES")),
+    }
+
+
 def next_interval(res: dict, state: dict) -> float:
     """Hours until the next cycle, and update the backoff in `state`."""
     if res["aborted"]:
@@ -182,6 +213,15 @@ def main() -> int:
             log(f"  weight sync: {sync['note']}")
             if sync["changed"]:
                 state["weight_updates"] = state.get("weight_updates", 0) + 1
+
+            wf = walk_forward(a.python)
+            state["last_walk_forward"] = wf
+            if wf["ran"]:
+                log(f"  walk-forward: best {wf['best_win']}% on {wf['best_n']} "
+                    f"trades, {wf['passing']} config(s) passed the gate, "
+                    f"90% target {'MET' if wf['target_met'] else 'not met'}")
+            else:
+                log(f"  walk-forward: skipped ({wf['note']})")
 
         wait = next_interval(res, state)
         save_state(state)
