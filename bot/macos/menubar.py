@@ -1,5 +1,5 @@
 """
-macOS menu bar app for SMC Trading Bot.
+macOS menu bar app for TraderX.
 Requires: pip install rumps pyobjc-framework-Cocoa
 Run: python -m bot.macos.menubar
 """
@@ -19,9 +19,9 @@ except ImportError:
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-class SMCBotApp(rumps.App):
+class TraderXApp(rumps.App):
     def __init__(self):
-        super().__init__("SMC Bot", quit_button=None)
+        super().__init__("TraderX", quit_button=None)
         self.bot_process: subprocess.Popen | None = None
         self.menu = [
             rumps.MenuItem("Start Bot", callback=self.start_bot),
@@ -47,8 +47,8 @@ class SMCBotApp(rumps.App):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        self.title = "SMC ●"
-        rumps.notification("SMC Bot", "Started", "Paper trading bot is running")
+        self.title = "TraderX ●"
+        rumps.notification("TraderX", "Started", "Paper trading bot is running")
 
     @rumps.clicked("Stop Bot")
     def stop_bot(self, _):
@@ -56,8 +56,8 @@ class SMCBotApp(rumps.App):
             self.bot_process.terminate()
             self.bot_process.wait(timeout=5)
         self.bot_process = None
-        self.title = "SMC Bot"
-        rumps.notification("SMC Bot", "Stopped", "Bot has been stopped")
+        self.title = "TraderX"
+        rumps.notification("TraderX", "Stopped", "Bot has been stopped")
 
     @rumps.clicked("Run Backtest")
     def run_backtest(self, _):
@@ -75,7 +75,7 @@ class SMCBotApp(rumps.App):
             rumps.alert("Backtest Results", output or "No output")
 
         threading.Thread(target=_run, daemon=True).start()
-        rumps.notification("SMC Bot", "Backtest", "Running backtest...")
+        rumps.notification("TraderX", "Backtest", "Running backtest...")
 
     @rumps.clicked("Scan Market")
     def scan_market(self, _):
@@ -108,7 +108,7 @@ def run_menubar():
     if rumps is None:
         print("Install macOS dependencies: pip install rumps pyobjc-framework-Cocoa")
         sys.exit(1)
-    SMCBotApp().run()
+    TraderXApp().run()
 
 
 if __name__ == "__main__":

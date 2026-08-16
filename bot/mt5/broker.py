@@ -42,11 +42,13 @@ class MT5Broker:
         symbol: str,
         mode: str = "paper",
         initial_balance: float = 10000.0,
+        cent_divisor: float = 1.0,
     ):
         self.client = client
         self.symbol = symbol
         self.mode = mode
         self.balance = initial_balance
+        self.cent_divisor = cent_divisor
         self.position: MT5Position | None = None
         self.trade_log: list[dict] = []
 
@@ -59,9 +61,19 @@ class MT5Broker:
         return self.client.symbol_info(self.symbol)
 
     def get_balance(self) -> float:
+        """Raw account balance in the broker's own units — used for sizing.
+
+        For a cent account this is cents, not dollars, but that's fine here:
+        the broker also reports tick_value in the same cent units, so the
+        risk-percentage math in calc_lot_size stays self-consistent.
+        """
         if self.mode == "paper":
             return self.balance
         return self.client.account_balance()
+
+    def get_display_balance(self) -> float:
+        """Real-dollar balance for human-facing output (divides out cent accounts)."""
+        return self.get_balance() / self.cent_divisor
 
     # --- execution -------------------------------------------------------
 
@@ -165,7 +177,9 @@ class MT5Broker:
              "ticket": self.position.ticket, "balance": balance}
         )
         print(f"[MT5 LIVE] CLOSE {self.position.side.upper()} "
-              f"ticket={self.position.ticket} | Balance=${balance:.2f}")
+              f"ticket={self.position.ticket} | "
+              f"Balance=${balance / self.cent_divisor:.2f}"
+              + (f" ({balance:.2f} account units)" if self.cent_divisor != 1 else ""))
         self.position = None
         return True
 

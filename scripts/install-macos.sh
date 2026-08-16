@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SMC Trading Bot — macOS installer (Apple Silicon + Intel)
+# TraderX — macOS installer (Apple Silicon + Intel)
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -7,7 +7,7 @@ cd "$PROJECT_DIR"
 
 ARCH=$(uname -m)
 echo "╔══════════════════════════════════════════╗"
-echo "║   SMC Trading Bot — macOS Setup          ║"
+echo "║   TraderX — macOS Setup                  ║"
 echo "║   Architecture: $ARCH                    ║"
 echo "╚══════════════════════════════════════════╝"
 
@@ -43,15 +43,39 @@ if [ ! -f ".env" ]; then
 fi
 
 # Build .app bundle
-APP_DIR="$PROJECT_DIR/macos/SMCBot.app"
+APP_DIR="$PROJECT_DIR/macos/TraderX.app"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
-cat > "$APP_DIR/Contents/MacOS/launcher" << 'LAUNCHER'
+cat > "$APP_DIR/Contents/MacOS/launcher" << LAUNCHER
 #!/bin/bash
-DIR="$(cd "$(dirname "$0")/../../../.." && pwd)"
-cd "$DIR"
-source venv/bin/activate
-exec python -m bot.macos.menubar
+# TraderX desktop launcher. Launched by macOS LaunchServices (double-click),
+# which gives a minimal PATH and arbitrary CWD — so absolute paths throughout,
+# and the venv interpreter is invoked directly (no reliance on \\\$0 or activate).
+DIR="$PROJECT_DIR"
+PY="\$DIR/venv/bin/python"
+LSOF="/usr/sbin/lsof"
+PORT=8420
+URL="http://127.0.0.1:\$PORT"
+
+# The venv python is universal but numpy/pandas are compiled arm64-only.
+# LaunchServices starts the app under x86_64 (Rosetta), where those .so files
+# fail to load. Force native arm64 so extensions match the interpreter arch.
+ARCH="/usr/bin/arch -arm64"
+
+cd "\$DIR" || exit 1
+
+# Start the local dashboard server only if it isn't already listening.
+if ! "\$LSOF" -iTCP:\$PORT -sTCP:LISTEN >/dev/null 2>&1; then
+    mkdir -p logs
+    nohup \$ARCH "\$PY" webapp/server.py >> logs/dashboard.log 2>&1 &
+    for i in \$(seq 1 20); do
+        "\$LSOF" -iTCP:\$PORT -sTCP:LISTEN >/dev/null 2>&1 && break
+        sleep 0.5
+    done
+fi
+
+# The visible result: the TraderX control panel opens in the default browser.
+/usr/bin/open "\$URL"
 LAUNCHER
 chmod +x "$APP_DIR/Contents/MacOS/launcher"
 
@@ -61,11 +85,13 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>SMC Bot</string>
+    <string>TraderX</string>
     <key>CFBundleDisplayName</key>
-    <string>SMC Trading Bot</string>
+    <string>TraderX</string>
     <key>CFBundleIdentifier</key>
-    <string>com.smc.tradingbot</string>
+    <string>com.traderx.tradingbot</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleExecutable</key>
@@ -82,11 +108,14 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
 </plist>
 PLIST
 
+cp "$PROJECT_DIR/macos/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
+codesign --force --deep --sign - "$APP_DIR" 2>/dev/null || true
+
 echo ""
 echo "✓ Installation complete!"
 echo ""
 echo "  Run bot (CLI):       python main.py"
 echo "  Run backtest:        python backtest.py --bars 2000"
-echo "  Menu bar app:        open macos/SMCBot.app"
+echo "  Menu bar app:        open macos/TraderX.app"
 echo "  Or:                  python -m bot.macos.menubar"
 echo ""

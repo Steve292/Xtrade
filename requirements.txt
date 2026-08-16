@@ -4,14 +4,33 @@ numpy>=1.26.0
 pyyaml>=6.0.1
 python-dotenv>=1.0.0
 web3>=6.15.0
+requests>=2.31.0
 
-# MT5 venue (optional — only needed for venue: mt5). Client side only; the
-# MetaTrader5 package itself runs on the remote Windows/Wine box, not here.
+# MT5 venue (optional — only needed for venue: mt5).
+# mt5_backend: bridge — client side only; MetaTrader5 itself runs on a remote
+# Windows/Wine box you provision, not here.
 mt5linux>=0.1.9
+# mt5_backend: metaapi — MetaApi.cloud hosts the terminal, no box needed.
+metaapi-cloud-sdk>=29.1.1
 
 # Hyperliquid DeFi wallet + perps (hyperwallet.py). eth-account comes with it.
 hyperliquid-python-sdk>=0.24.0
 
+# Local control panel (webapp/server.py) — binds 127.0.0.1 only
+flask>=3.1.0
+
 # macOS menu bar (optional — auto-installed by install-macos.sh)
 # rumps>=0.4.0
 # pyobjc-framework-Cocoa>=10.0
+
+# Trading-knowledge ingestion (bot/knowledge/) — optional, report-only, not on
+# the live trading path. yt-dlp is invoked as an external BINARY and never
+# imported: the CLI is its stable interface, it must be updatable independently
+# of this repo as YouTube breaks extractors, and nobody installing a trading bot
+# should get a YouTube downloader by default. Install it yourself, or point
+# knowledge.ytdlp_path / $YTDLP_PATH at an existing copy.
+# yt-dlp>=2025.1.1
+#
+# Whisper fallback, only for videos with no captions at all. faster-whisper is
+# the CPU-friendly one; openai-whisper pulls in torch (~2GB).
+# faster-whisper>=1.1.0

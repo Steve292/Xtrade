@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "traderx-signals": {
+      "command": "mcp_server/venv/bin/python",
+      "args": ["mcp_server/server.py"]
+    }
+  }
+}

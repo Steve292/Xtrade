@@ -17,6 +17,7 @@ from .structure import (
     is_in_premium,
     premium_discount_zone,
 )
+from .supply_demand import detect_supply_demand_zones, nearest_zone
 
 
 class SignalType(str, Enum):
@@ -55,12 +56,51 @@ class SMCStrategy:
         fvg_min_size_pct: float = 0.001,
         liquidity_tolerance_pct: float = 0.0005,
         reward_risk_ratio: float = 2.0,
+        stop_loss_pct: float | None = None,
+        stop_atr_mult: float | None = None,
     ):
         self.swing_lookback = swing_lookback
         self.order_block_lookback = order_block_lookback
         self.fvg_min_size_pct = fvg_min_size_pct
         self.liquidity_tolerance_pct = liquidity_tolerance_pct
         self.reward_risk_ratio = reward_risk_ratio
+        # At explicit user request: a fixed stop distance from entry,
+        # replacing the order-block/FVG-boundary invalidation stop below.
+        # None (default) keeps the original structural-stop behavior —
+        # only live callers that opt in (config.yaml's stop_loss_pct) get
+        # the fixed-percentage stop; backtests/scan.py/market_snapshot.py's
+        # informational second-opinion strategy are untouched.
+        self.stop_loss_pct = stop_loss_pct
+        # ATR-based stop distance -- sized from what the instrument ACTUALLY
+        # moves, which a fixed percentage cannot be.
+        #
+        # Measured, not assumed: with stop_loss_pct=0.20 on XAUUSDc M15, a
+        # short at 4504 places its stop at 5405 and its target at 2702. Gold's
+        # entire range over 5,000 bars (2.5 months) was 3942-4541, a span of
+        # 599. The stop sat 864 points above the highest price reached and the
+        # target 1,240 below the lowest, so the position could never close --
+        # and with max_open_trades=1 the bot then never traded again. A
+        # backtest over that window produced exactly ZERO closed trades with
+        # the fixed stop, and 23 with structural stops.
+        #
+        # Takes precedence over stop_loss_pct when both are set, because a
+        # percentage that ignores volatility is the bug this fixes.
+        self.stop_atr_mult = stop_atr_mult
+
+
+    def _atr_stop_distance(self, df: pd.DataFrame) -> float | None:
+        """ATR(14) * stop_atr_mult, or None when it cannot be computed."""
+        if self.stop_atr_mult is None:
+            return None
+        try:
+            from bot.position_sizing import atr
+            series = atr(df, period=14)
+            value = float(series.iloc[-1])
+        except Exception:
+            return None
+        if value <= 0 or value != value:      # NaN-safe
+            return None
+        return value * self.stop_atr_mult
 
     def analyze(self, df: pd.DataFrame, htf_df: pd.DataFrame | None = None) -> Signal:
         if len(df) < 50:
@@ -85,22 +125,24 @@ class SMCStrategy:
         fvgs = detect_fvg(df, self.fvg_min_size_pct)
         pools = detect_liquidity_pools(df, self.liquidity_tolerance_pct)
         sweep = recent_sweep(pools, df, bars=5)
+        sd_zones = detect_supply_demand_zones(df, swings)
 
         long_signal = self._check_long(
-            price, trend, htf_trend, events, zone, order_blocks, fvgs, sweep, df
+            price, trend, htf_trend, events, zone, order_blocks, fvgs, sweep, sd_zones, df
         )
         if long_signal.type != SignalType.NONE:
             return long_signal
 
         short_signal = self._check_short(
-            price, trend, htf_trend, events, zone, order_blocks, fvgs, sweep, df
+            price, trend, htf_trend, events, zone, order_blocks, fvgs, sweep, sd_zones, df
         )
         if short_signal.type != SignalType.NONE:
             return short_signal
 
-        return self._no_signal("No confluence")
+        # No confluence — explain WHY, so a "no setup" is diagnostic, not opaque.
+        return self._no_signal(self._diagnose(price, trend, htf_trend, events, zone, sweep, sd_zones))
 
-    def _check_long(self, price, trend, htf_trend, events, zone, obs, fvgs, sweep, df):
+    def _check_long(self, price, trend, htf_trend, events, zone, obs, fvgs, sweep, sd_zones, df):
         score = 0.0
         reasons: list[str] = []
 
@@ -125,6 +167,10 @@ class SMCStrategy:
             score += 0.15
             reasons.append("Discount zone")
 
+        if nearest_zone(price, sd_zones, "demand") is not None:
+            score += 0.15
+            reasons.append("Demand zone")
+
         entry_zone = None
         for ob in reversed(obs):
             if ob.direction == "bullish" and price_in_order_block(price, ob):
@@ -144,7 +190,12 @@ class SMCStrategy:
         if score < 0.55 or entry_zone is None:
             return self._no_signal("Long confluence insufficient")
 
-        if hasattr(entry_zone, "bottom"):
+        atr_dist = self._atr_stop_distance(df)
+        if atr_dist is not None:
+            stop = price - atr_dist
+        elif self.stop_loss_pct is not None:
+            stop = price * (1 - self.stop_loss_pct)
+        elif hasattr(entry_zone, "bottom"):
             stop = entry_zone.bottom * 0.999
         else:
             stop = price * 0.985
@@ -161,7 +212,7 @@ class SMCStrategy:
             confidence=min(score, 1.0),
         )
 
-    def _check_short(self, price, trend, htf_trend, events, zone, obs, fvgs, sweep, df):
+    def _check_short(self, price, trend, htf_trend, events, zone, obs, fvgs, sweep, sd_zones, df):
         score = 0.0
         reasons: list[str] = []
 
@@ -186,6 +237,10 @@ class SMCStrategy:
             score += 0.15
             reasons.append("Premium zone")
 
+        if nearest_zone(price, sd_zones, "supply") is not None:
+            score += 0.15
+            reasons.append("Supply zone")
+
         entry_zone = None
         for ob in reversed(obs):
             if ob.direction == "bearish" and price_in_order_block(price, ob):
@@ -205,7 +260,12 @@ class SMCStrategy:
         if score < 0.55 or entry_zone is None:
             return self._no_signal("Short confluence insufficient")
 
-        if hasattr(entry_zone, "top"):
+        atr_dist = self._atr_stop_distance(df)
+        if atr_dist is not None:
+            stop = price + atr_dist
+        elif self.stop_loss_pct is not None:
+            stop = price * (1 + self.stop_loss_pct)
+        elif hasattr(entry_zone, "top"):
             stop = entry_zone.top * 1.001
         else:
             stop = price * 1.015
@@ -221,6 +281,56 @@ class SMCStrategy:
             reason=" + ".join(reasons),
             confidence=min(score, 1.0),
         )
+
+    def _diagnose(self, price, trend, htf_trend, events, zone, sweep, sd_zones) -> str:
+        """Explain WHY there's no setup — the specific confluences that are
+        missing right now, so a 'no setup' verdict is actionable rather than
+        opaque. Reads the same market state _check_long/_check_short scored."""
+        clues: list[str] = []
+
+        # Trend / structure state
+        if trend == Trend.NEUTRAL and htf_trend == Trend.NEUTRAL:
+            clues.append("ranging (no clear trend)")
+        elif trend == Trend.NEUTRAL:
+            clues.append("choppy LTF structure")
+        elif htf_trend != Trend.NEUTRAL and trend != Trend.NEUTRAL and htf_trend != trend:
+            clues.append(f"HTF {htf_trend.value} vs LTF {trend.value} conflict")
+
+        if not events:
+            clues.append("no recent BOS/CHoCH")
+
+        # Liquidity
+        if sweep is None:
+            clues.append("no liquidity sweep")
+
+        # Premium/discount location
+        low, eq, high = zone
+        rng = high - low
+        if low <= price <= eq:
+            loc = "discount"
+        elif eq <= price <= high:
+            loc = "premium"
+        else:
+            loc = "outside range"
+        if not (low <= price <= high):
+            clues.append("price outside the dealing range")
+        elif rng > 0 and abs(price - eq) / rng < 0.08:
+            clues.append("price at equilibrium (mid-range)")
+
+        # Supply / demand
+        has_demand = any(z.kind == "demand" for z in sd_zones)
+        has_supply = any(z.kind == "supply" for z in sd_zones)
+        at_demand = nearest_zone(price, sd_zones, "demand") is not None
+        at_supply = nearest_zone(price, sd_zones, "supply") is not None
+        if not at_demand and not at_supply:
+            if has_demand or has_supply:
+                clues.append("price not at a supply/demand zone")
+            else:
+                clues.append("no supply/demand zones formed")
+
+        if not clues:
+            clues.append(f"confluence too weak in {loc}")
+        return "No setup: " + ", ".join(clues)
 
     def _no_signal(self, reason: str) -> Signal:
         return Signal(

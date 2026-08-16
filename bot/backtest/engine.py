@@ -29,6 +29,12 @@ class BacktestResult:
     timestamps: list[pd.Timestamp] = field(default_factory=list)
     initial_balance: float = 10000.0
     final_balance: float = 10000.0
+    # Default preserves this module's original hardcoded assumption (15m
+    # candles) for any caller that builds a BacktestResult directly without
+    # setting this — BacktestEngine.run() below computes the real value from
+    # the actual candle spacing instead of assuming 15m regardless of what
+    # timeframe was actually backtested.
+    bars_per_year: float = 252 * 24 * 4
 
     @property
     def total_return_pct(self) -> float:
@@ -66,7 +72,47 @@ class BacktestResult:
         returns = pd.Series(self.equity_curve).pct_change().dropna()
         if returns.std() == 0:
             return 0.0
-        return float(returns.mean() / returns.std() * np.sqrt(252 * 24 * 4))  # 15m bars
+        return float(returns.mean() / returns.std() * np.sqrt(self.bars_per_year))
+
+    @property
+    def calmar_ratio(self) -> float:
+        """Annualized return / max drawdown — the walk-forward optimizer's
+        other deploy/revert gate alongside sharpe_ratio (bot/backtest/
+        optimizer.py). Uses self.bars_per_year, same as sharpe_ratio above.
+        Projecting a short window's return out to a full year can blow up
+        numerically (a small gain over a handful of bars, annualized, is
+        astronomical, not a bug) — caught and reported as +inf/0 rather than
+        raising."""
+        if len(self.equity_curve) < 2:
+            return 0.0
+        growth = self.equity_curve[-1] / self.equity_curve[0]
+        if growth <= 0:
+            return 0.0
+        try:
+            annualized_return_pct = (growth ** (self.bars_per_year / len(self.equity_curve)) - 1) * 100
+        except OverflowError:
+            annualized_return_pct = float("inf") if growth > 1 else float("-inf")
+        if self.max_drawdown_pct == 0:
+            return float("inf") if annualized_return_pct > 0 else 0.0
+        return annualized_return_pct / self.max_drawdown_pct
+
+
+def _infer_bars_per_year(timestamps: list, default_bars_per_day: float = 24 * 4) -> float:
+    """Derive the annualization factor from the ACTUAL bar spacing of this
+    backtest, rather than assuming 15m candles regardless of what timeframe
+    was really passed in — a real bug caught while running the walk-forward
+    optimizer at its practical 1h default (scripts/walk_forward_optimize.py):
+    the old hardcoded 15m assumption was silently over-annualizing Sharpe/
+    Calmar by ~2x on 1h data. 252 trading days/year matches this module's
+    pre-existing convention (unchanged) — only the intra-day bar count now
+    reflects the real data."""
+    if len(timestamps) < 2:
+        return 252 * default_bars_per_day
+    diffs = pd.Series(timestamps).diff().dropna()
+    median_seconds = diffs.median().total_seconds()
+    if median_seconds <= 0:
+        return 252 * default_bars_per_day
+    return 252 * (86400.0 / median_seconds)
 
 
 def resample_htf(df: pd.DataFrame, htf: str) -> pd.DataFrame:
@@ -99,7 +145,17 @@ class BacktestEngine:
         df: pd.DataFrame,
         htf_df: pd.DataFrame | None = None,
         htf: str = "1h",
+        screener=None,
     ) -> BacktestResult:
+        """screener: an optional bot.screening.TradeScreener.
+
+        Defaults to None, which is the original behaviour exactly -- every
+        signal the strategy produces is taken. Passing one makes the backtest
+        apply the SAME approval gate the live path uses, which is the only way
+        to measure what a gate actually does to profit factor rather than
+        assuming a stricter filter must help. It usually filters out losers
+        AND winners; whether the net is positive is an empirical question.
+        """
         balance = self.initial_balance
         position: dict | None = None
         trades: list[Trade] = []
@@ -156,7 +212,10 @@ class BacktestEngine:
                     htf_window = htf_df.iloc[: max(20, len(htf_df))]
 
                 signal = self.strategy.analyze(window, htf_window)
-                if signal.type != SignalType.NONE:
+                if signal.type != SignalType.NONE and screener is not None:
+                    if not screener.screen(signal, window, htf_window).approved:
+                        signal = None
+                if signal is not None and signal.type != SignalType.NONE:
                     size = calc_position_size(
                         balance, signal.entry, signal.stop_loss, self.risk_pct
                     )
@@ -180,6 +239,7 @@ class BacktestEngine:
             timestamps=timestamps,
             initial_balance=self.initial_balance,
             final_balance=balance,
+            bars_per_year=_infer_bars_per_year(timestamps),
         )
 
     def _pnl(self, position: dict, exit_price: float) -> float:

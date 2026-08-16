@@ -2,22 +2,47 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 
 import yaml
 from dotenv import load_dotenv
 
+from bot import live_state
+from bot.capital_guard import CapitalGuard, trading_day
+from bot.combined_ledger import fetch_combined_balance, reconnect_if_needed
 from bot.exchange import Exchange
 from bot.evm.dex import EVMDex
 from bot.evm.wallet import EVMWallet
+from bot.hyperliquid.client import HyperliquidClient
+from bot.market_snapshot import get_cached_snapshot
 from bot.mt5.broker import MT5Broker
 from bot.mt5.client import MT5Client
+from bot.mt5.metaapi_client import MetaApiClient
+from bot import pending_trades
+from bot.position_sizing import risk_pct_for_fixed_usd, staged_fixed_risk_usd
 from bot.risk import calc_lot_size, calc_position_size
+from bot.screening import ScreenConfig, TradeScreener
 from bot.smc.strategy import SMCStrategy, SignalType
+from bot import trade_review
+from bot.unified_screen import evaluate_unified
+from bot.wallet import DefiWallet
 
 
 def load_config(path: str = "config.yaml") -> dict:
     with open(path) as f:
         return yaml.safe_load(f)
+
+
+def _connect_hl_ledger(config: dict) -> HyperliquidClient:
+    """Raises on failure -- caller decides how to handle it. Split out so the
+    main loop can retry this every pass (see the note on hl_ledger_client
+    below) instead of only ever trying once at startup."""
+    hl_cfg = config.get("hyperliquid", {})
+    hl_wallet = DefiWallet.from_env() or DefiWallet.load()
+    return HyperliquidClient.connect(
+        private_key=hl_wallet.private_key if hl_wallet else "",
+        testnet=hl_cfg.get("testnet", True),
+    )
 
 
 def run_bot(config_path: str = "config.yaml") -> None:
@@ -33,7 +58,20 @@ def run_bot(config_path: str = "config.yaml") -> None:
         fvg_min_size_pct=config.get("fvg_min_size_pct", 0.001),
         liquidity_tolerance_pct=config.get("liquidity_tolerance_pct", 0.0005),
         reward_risk_ratio=config.get("reward_risk_ratio", 2.0),
+        stop_loss_pct=config.get("stop_loss_pct"),
+        # ATR-sized stop. Takes precedence over stop_loss_pct inside
+        # SMCStrategy when both are set -- a fixed percentage cannot
+        # track what the instrument actually moves, and at 0.20 on gold
+        # it placed stops beyond any price the market reached.
+        stop_atr_mult=config.get("stop_atr_mult"),
     )
+    # Same seven-gate screen the Hyperliquid path (hypertrade.py) has always
+    # required — this loop previously entered on the raw SMC signal alone
+    # (signal.type != NONE), a real gap where MT5/CEX/EVM traded on a
+    # materially weaker bar than Hyperliquid. Screening only ever ADDS
+    # scrutiny on top of the existing arm-gate/confidence-floor checks below,
+    # it never loosens anything.
+    screener = TradeScreener(ScreenConfig.from_dict(config.get("screening", {})))
 
     symbol = config["symbol"]
     timeframe = config["timeframe"]
@@ -42,28 +80,83 @@ def run_bot(config_path: str = "config.yaml") -> None:
     risk_pct = config.get("risk_per_trade_pct", 1.0)
     max_open_trades = config.get("max_open_trades", 1)
     initial_balance = config.get("initial_balance", 10000.0)
+    # Staged fixed-dollar risk (config.yaml's fixed_risk_usd) overrides
+    # risk_pct above when enabled — recomputed every pass from the live
+    # combined balance below, not applied here since that balance isn't
+    # known yet at startup.
+    fixed_risk_cfg = config.get("fixed_risk_usd", {})
 
-    exchange: Exchange | None = None
     evm_dex: EVMDex | None = None
-    broker: MT5Broker | None = None
+    # One entry per scanned symbol: its data source, executor, and (mt5 only)
+    # the MT5Broker for lot-sizing off that symbol's own tick economics. Every
+    # non-mt5 venue just runs a single-item watchlist — same loop either way.
+    watchlist: list[dict] = []
+    # Combined-ledger guard: only ever set up for venue == "mt5" (see below),
+    # but declared here so the main loop can safely check it for every venue.
+    combined_guard: CapitalGuard | None = None
+    hl_ledger_client = None
 
     if venue == "mt5":
-        # MT5 supplies both market data and execution via the remote bridge.
-        symbol = config.get("mt5_symbol", symbol)
+        # MT5 supplies both market data and execution, via either backend —
+        # both expose the identical MT5Client interface, so MT5Broker below
+        # is unchanged regardless of which one is selected.
         timeframe = config.get("mt5_timeframe", timeframe)
-        host = os.getenv("MT5_HOST", "127.0.0.1")
-        port = os.getenv("MT5_PORT", "18812")
-        client = MT5Client.connect(
-            host=host,
-            port=port,
-            login=os.getenv("MT5_LOGIN", ""),
-            password=os.getenv("MT5_PASSWORD", ""),
-            server=os.getenv("MT5_SERVER", ""),
-        )
-        broker = MT5Broker(client, symbol=symbol, mode=mode, initial_balance=initial_balance)
-        data = broker
-        executor = broker
-        print(f"  MT5 Bridge: {host}:{port}")
+        backend = config.get("mt5_backend", "bridge")  # bridge | metaapi
+        if backend == "metaapi":
+            client = MetaApiClient.connect(
+                token=os.getenv("METAAPI_TOKEN", ""),
+                login=os.getenv("MT5_LOGIN", ""),
+                password=os.getenv("MT5_PASSWORD", ""),
+                server=os.getenv("MT5_SERVER", ""),
+            )
+            print("  MT5 backend: MetaApi.cloud")
+        else:
+            host = os.getenv("MT5_HOST", "127.0.0.1")
+            port = os.getenv("MT5_PORT", "18812")
+            client = MT5Client.connect(
+                host=host,
+                port=port,
+                login=os.getenv("MT5_LOGIN", ""),
+                password=os.getenv("MT5_PASSWORD", ""),
+                server=os.getenv("MT5_SERVER", ""),
+                terminal_path=os.getenv("MT5_TERMINAL_PATH", ""),
+            )
+            print(f"  MT5 Bridge: {host}:{port}")
+        cent_divisor = 100.0 if config.get("mt5_cent_account") else 1.0
+        mt5_symbols = config.get("mt5_watchlist") or [config.get("mt5_symbol", symbol)]
+        for sym in mt5_symbols:
+            sym_broker = MT5Broker(
+                client, symbol=sym, mode=mode,
+                initial_balance=initial_balance, cent_divisor=cent_divisor,
+            )
+            watchlist.append(
+                {"symbol": sym, "data": sym_broker, "executor": sym_broker, "broker": sym_broker}
+            )
+        symbol = mt5_symbols[0]
+
+        # Combined ledger: a second, independent guard fed the TOTAL across
+        # both live venues (MT5 + Hyperliquid), so a bad day on Hyperliquid
+        # can halt new MT5 entries too. Same thresholds as capital_guard,
+        # own state file — mirrors the identical setup in hypertrade.py.
+        # Best-effort — if Hyperliquid isn't reachable at startup, the main
+        # loop retries the connection every pass (see below) rather than
+        # giving up for the rest of this (often days-long) process's life;
+        # a stuck None here previously made the combined guard silently
+        # treat Hyperliquid as "contributing $0" instead of skipping the
+        # update, which could fire a false drawdown halt off a connectivity
+        # blip rather than a real loss.
+        if mode == "live":
+            guard_cfg = config.get("capital_guard", {})
+            guard_thresholds = {
+                k: guard_cfg[k] for k in CapitalGuard.__dataclass_fields__ if k in guard_cfg
+            }
+            combined_guard = CapitalGuard.load(Path("combined_guard_state.json"), **guard_thresholds)
+            try:
+                hl_ledger_client = _connect_hl_ledger(config)
+                print("  Combined ledger: Hyperliquid connected")
+            except Exception as e:
+                print(f"  Combined ledger: Hyperliquid unavailable at startup ({type(e).__name__}) "
+                      f"— guard runs on MT5 balance alone, retrying each pass")
     else:
         # CEX exchange supplies OHLCV data (and execution for the cex venue).
         exchange = Exchange(
@@ -73,7 +166,6 @@ def run_bot(config_path: str = "config.yaml") -> None:
             mode=mode,
             initial_balance=initial_balance,
         )
-        data = exchange
         executor = exchange
         if venue == "evm":
             wallet = EVMWallet.from_env()
@@ -85,88 +177,328 @@ def run_bot(config_path: str = "config.yaml") -> None:
             print(f"  ETH:        {bal.eth:.4f}")
             print(f"  USDC:       ${bal.usdc:,.2f}")
             print(f"  RPC:        {'connected' if wallet.is_connected else 'offline (paper)'}")
+        watchlist.append({"symbol": symbol, "data": exchange, "executor": executor, "broker": None})
 
     price_decimals = 5 if venue == "mt5" else 2
+    multi = len(watchlist) > 1
 
     print("=" * 60)
-    print("  SMC Trading Bot — Smart Money Concepts")
+    print("  TraderX — Smart Money Concepts")
     print("=" * 60)
     print(f"  Venue:     {venue.upper()}")
-    print(f"  Symbol:    {symbol}")
+    if multi:
+        print(f"  Watchlist: {', '.join(item['symbol'] for item in watchlist)}")
+    else:
+        print(f"  Symbol:    {symbol}")
     print(f"  Timeframe: {timeframe} (HTF: {htf})")
     print(f"  Mode:      {mode.upper()}")
-    if venue in ("cex", "mt5"):
-        print(f"  Balance:   ${executor.get_balance():,.2f}")
+    if venue == "mt5":
+        first_broker = watchlist[0]["broker"]
+        raw_balance = first_broker.get_balance()
+        print(f"  Balance:   ${first_broker.get_display_balance():,.2f}"
+              + (f" ({raw_balance:,.2f} account units)" if first_broker.cent_divisor != 1 else ""))
+    elif venue == "cex":
+        print(f"  Balance:   ${watchlist[0]['executor'].get_balance():,.2f}")
+    if multi:
+        print(f"  Max open:  {max_open_trades} (shared across the whole watchlist)")
+    if mode == "live":
+        print(f"  Armed:     {'YES — will place REAL orders' if live_state.is_armed() else 'NO — screening only until armed via control panel'}")
     print("=" * 60)
     print("  Scanning for SMC confluence...\n")
 
+    # Abstention veto tallies, session-cumulative. Kept outside the loop so the
+    # count is "how often did we decline this session", not per-pass noise.
+    veto_counts: dict[str, int] = {}
+    # Last indicator dissent per symbol, when the gates are advisory. Recorded
+    # so "the gates disagreed and we traded anyway" is inspectable after the
+    # fact rather than only scrolling past in the log.
+    indicator_notes: dict[str, list] = {}
+
     while True:
         try:
-            df = data.fetch_ohlcv(symbol, timeframe, limit=200)
-            htf_df = data.fetch_ohlcv(symbol, htf, limit=100)
-            current_price = float(df.iloc[-1]["close"])
+            open_count = sum(1 for item in watchlist if item["executor"].position is not None)
 
-            executor.check_exit(current_price)
-            open_count = 1 if executor.position is not None else 0
+            # Global smart-money read (bot/unified_screen.py's second gate,
+            # alongside the seven-gate structure screen below) — cached
+            # 15 minutes (bot/market_snapshot.py) since it's market-wide, not
+            # per-symbol, and this loop polls far more often than that data
+            # actually changes. A failed fetch degrades to NEUTRAL (never
+            # blocks on its own) rather than halting live trading over a
+            # transient Yahoo/CoinGecko/Deribit hiccup.
+            try:
+                _snapshot = get_cached_snapshot(config)
+                sm_direction = _snapshot["smart_money"]["direction"]
+                sm_bullish = _snapshot["smart_money"]["bullish_count"]
+                sm_bearish = _snapshot["smart_money"]["bearish_count"]
+            except Exception as e:
+                print(f"  [smart money] snapshot unavailable this pass ({type(e).__name__}) — treating as NEUTRAL")
+                sm_direction, sm_bullish, sm_bearish = "NEUTRAL", 0, 0
 
-            if open_count < max_open_trades:
-                signal = strategy.analyze(df, htf_df)
+            # risk_usd is None unless fixed_risk_usd is enabled AND this pass's
+            # combined-balance fetch succeeds — None means "use the configured
+            # static risk_per_trade_pct" (below), the same fallback as a failed
+            # fetch, rather than sizing on stale or missing data. Only decides
+            # WHICH STAGE ($3 vs $6) applies here — it's converted to an actual
+            # risk_pct per-symbol below, against THAT symbol's own balance, so
+            # the realized dollar risk is risk_usd regardless of how the
+            # combined total (used only for staging) differs from any one
+            # venue's own balance.
+            risk_usd = None
 
-                if signal.type != SignalType.NONE:
-                    if venue == "evm" and evm_dex:
-                        balance = evm_dex.get_usdc_balance()
+            if combined_guard is not None:
+                was_down = hl_ledger_client is None
+                hl_ledger_client = reconnect_if_needed(hl_ledger_client, lambda: _connect_hl_ledger(config))
+                if was_down and hl_ledger_client is not None:
+                    print("  Combined ledger: Hyperliquid reconnected")
+
+                if hl_ledger_client is None:
+                    # Deliberately skip fetch_combined_balance entirely here
+                    # rather than call it with client=None: that function's
+                    # None-means-"not tracked, contributes $0" contract is
+                    # correct for a deployment that never tracks this venue,
+                    # but WRONG here -- this run always tries to track
+                    # Hyperliquid, so None only ever means "unreachable right
+                    # now." Feeding it in as $0 would look like a real loss
+                    # and could fire a false drawdown halt off a connectivity
+                    # blip; skipping preserves the guard's last known state.
+                    print("  [combined ledger] Hyperliquid unreachable this pass — "
+                          "guard state unchanged, using last known status")
+                else:
+                    combined = fetch_combined_balance(hl_ledger_client, client, cent_divisor)
+                    if combined is not None:
+                        combined_guard.update(combined.total, trading_day())
+                        if fixed_risk_cfg.get("enabled"):
+                            risk_usd = staged_fixed_risk_usd(
+                                combined.total,
+                                low_risk_usd=fixed_risk_cfg.get("low", 3.0),
+                                high_risk_usd=fixed_risk_cfg.get("high", 6.0),
+                                threshold_usd=fixed_risk_cfg.get("threshold_usd", 100.0),
+                            )
+                            print(f"  [fixed risk] combined balance ${combined.total:,.2f} -> ${risk_usd:.2f}/trade")
                     else:
-                        balance = executor.get_balance()
+                        print("  [combined ledger] balance fetch failed this pass — "
+                              "guard state unchanged, using last known status")
 
-                    if venue == "mt5" and broker:
-                        size = calc_lot_size(
-                            broker.get_symbol_info(),
-                            balance,
-                            signal.entry,
-                            signal.stop_loss,
-                            risk_pct,
-                        )
-                    else:
-                        size = calc_position_size(
-                            balance, signal.entry, signal.stop_loss, risk_pct
-                        )
+            for item in watchlist:
+                sym = item["symbol"]
+                data = item["data"]
+                executor = item["executor"]
+                broker = item["broker"]
+                try:
+                    df = data.fetch_ohlcv(sym, timeframe, limit=200)
+                    htf_df = data.fetch_ohlcv(sym, htf, limit=100)
+                    current_price = float(df.iloc[-1]["close"])
 
-                    if size > 0:
-                        side = "long" if signal.type == SignalType.LONG else "short"
+                    executor.check_exit(current_price)
+
+                    if executor.position is not None or open_count >= max_open_trades:
+                        continue
+                    if combined_guard is not None and combined_guard.halted:
+                        print(f"[{sym}] blocked by combined ledger: {combined_guard.halt_reason}")
+                        continue
+
+                    # Abstention veto (bot/trade_review.py). This is the single
+                    # gate on "is there a setup here at all", replacing the
+                    # `signal.type != NONE` test that used to be repeated three
+                    # times below. Two things it adds over the inline form:
+                    # it FAILS CLOSED (a detector raising used to propagate out
+                    # of the scan loop rather than skip the symbol), and every
+                    # abstention is counted instead of vanishing.
+                    #
+                    # Measured over 3,547 real positions: the cohort with no SMC
+                    # setup lost 33,859 at PF 0.912, and the rule held on a
+                    # chronological out-of-sample split. See bot/trade_review.py.
+                    verdict = trade_review.review(strategy, df, htf_df)
+                    if not verdict.allowed:
+                        key = verdict.reason.split("(")[0].strip()
+                        veto_counts[key] = veto_counts.get(key, 0) + 1
+                        ts = df.iloc[-1]["timestamp"]
+                        prefix = f"[{sym}] " if multi else ""
+                        print(f"{prefix}[{ts}] No trade — {verdict.reason} | "
+                              f"Price: {current_price:.{price_decimals}f}")
+                        continue
+
+                    # Guaranteed non-NONE past the veto, and reused from the
+                    # verdict so the strategy is not run twice per symbol.
+                    signal = verdict.signal
+                    screen_result = screener.screen(signal, df, htf_df)
+                    unified = evaluate_unified(
+                        signal, screen_result, sm_direction, sm_bullish, sm_bearish
+                    )
+
+                    # THE VETO IS THE ONLY THING THAT CAN STOP A TRADE.
+                    #
+                    # In advisory mode the gates still run and still report an
+                    # honest verdict -- they are INDICATORS, printed on every
+                    # pass -- but they cannot reject. Anything that survived the
+                    # veto above fires.
+                    #
+                    # Why: measured over 3,547 real positions with bootstrap
+                    # CIs, no gated configuration separated from a losing one.
+                    # veto+best-half was PF 1.093 on a [0.593, 1.862] interval
+                    # with expectancy indistinguishable from zero, and the gates
+                    # moved PF by +0.03..0.06 while cutting the sample from 600
+                    # to ~141. A filter that quadruples your uncertainty and
+                    # leaves the estimate inside the noise is not a filter.
+                    #
+                    # Set screening.advisory_only: false to make them binding
+                    # again -- the checks and their reasons are unchanged, only
+                    # whether this branch honours them.
+                    advisory = getattr(screener.cfg, "advisory_only", False)
+                    if advisory and not unified.approved:
+                        ts = df.iloc[-1]["timestamp"]
+                        prefix = f"[{sym}] " if multi else ""
+                        failed = [c.name for c in screen_result.checks if not c.passed]
+                        indicator_notes[sym] = failed
+                        print(f"{prefix}[{ts}] INDICATORS DISSENT ({len(failed)}): "
+                              f"{', '.join(failed[:4])}"
+                              f"{'...' if len(failed) > 4 else ''} — "
+                              f"firing on veto anyway (advisory_only)")
+
+                    if unified.approved or advisory:
                         if venue == "evm" and evm_dex:
-                            evm_dex.open_position(
-                                side=side,
-                                entry=signal.entry,
-                                size_usd=size * signal.entry,
-                                sl=signal.stop_loss,
-                                tp=signal.take_profit,
-                                reason=signal.reason,
+                            balance = evm_dex.get_usdc_balance()
+                        else:
+                            balance = executor.get_balance()
+
+                        # Fixed-dollar risk is converted to a risk_pct against
+                        # THIS symbol's own balance (not the combined total,
+                        # which only decided the $3-vs-$6 stage above) — that's
+                        # what makes the realized dollar risk actually risk_usd
+                        # regardless of how the combined figure differs from
+                        # any one venue's own balance. cent-account balances
+                        # (raw MT5 units) are fine here unconverted: risk_pct is
+                        # a ratio, and calc_lot_size's tick_value is in the same
+                        # raw units, so the result is unit-consistent either way
+                        # — EXCEPT this per-symbol balance is real USD (evm) or
+                        # raw cent units (mt5), never combined.total's already-
+                        # converted USD, so recompute risk_usd -> risk_pct fresh
+                        # per symbol against the units actually in play here.
+                        if risk_usd is not None:
+                            symbol_balance_usd = balance / cent_divisor if broker is not None else balance
+                            effective_risk_pct = risk_pct_for_fixed_usd(risk_usd, symbol_balance_usd)
+                        else:
+                            effective_risk_pct = risk_pct
+
+                        if broker is not None:
+                            size = calc_lot_size(
+                                broker.get_symbol_info(),
+                                balance,
+                                signal.entry,
+                                signal.stop_loss,
+                                effective_risk_pct,
                             )
                         else:
-                            executor.open_position(
-                                side=side,
-                                entry=signal.entry,
-                                size=size,
-                                sl=signal.stop_loss,
-                                tp=signal.take_profit,
-                                reason=signal.reason,
-                                symbol=symbol,
+                            size = calc_position_size(
+                                balance, signal.entry, signal.stop_loss, effective_risk_pct
                             )
-                        print(f"        Confidence: {signal.confidence:.0%}")
-                else:
-                    ts = df.iloc[-1]["timestamp"]
-                    print(f"[{ts}] No signal — {signal.reason} | "
-                          f"Price: {current_price:.{price_decimals}f}")
+
+                        if size > 0:
+                            # Arm gate: in live mode, place a real order ONLY when
+                            # armed (the shared control-panel toggle, bot/live_state.py).
+                            # Disarmed live mode screens and reports but never sends
+                            # an order — the same safety default the Hyperliquid path
+                            # (hypertrade.py) uses. Paper mode is unaffected.
+                            if mode == "live" and not live_state.is_armed():
+                                ts = df.iloc[-1]["timestamp"]
+                                prefix = f"[{sym}] " if multi else ""
+                                print(f"{prefix}[{ts}] SIGNAL {signal.type.value.upper()} "
+                                      f"conf {signal.confidence:.0%} — DISARMED, no live order "
+                                      f"(arm via the control panel's Activate toggle to enable)")
+                                continue
+                            # Runtime authorization floor (control panel): setups
+                            # below it aren't worth considering at all — not even
+                            # worth queueing for review.
+                            floor = live_state.get_min_confidence()
+                            if mode == "live" and signal.confidence < floor:
+                                ts = df.iloc[-1]["timestamp"]
+                                prefix = f"[{sym}] " if multi else ""
+                                print(f"{prefix}[{ts}] SIGNAL {signal.type.value.upper()} "
+                                      f"conf {signal.confidence:.0%} below authorization floor "
+                                      f"{floor:.0%} — no live order")
+                                continue
+
+                            side = "long" if signal.type == SignalType.LONG else "short"
+
+                            # Hands-off threshold, measured against the unified
+                            # gate's BLENDED final_pct (not raw confidence). At or
+                            # above it this fires unattended; below it the setup is
+                            # queued for Approve/Cancel on the control panel rather
+                            # than dropped, so a decent-but-not-automatic setup is
+                            # still actionable instead of vanishing into the log.
+                            auto_fire_pct = live_state.get_auto_fire_pct()
+                            if mode == "live" and unified.final_pct < auto_fire_pct:
+                                pending_trades.add(
+                                    venue=venue, symbol=sym, side=side,
+                                    entry_price=signal.entry, stop_loss=signal.stop_loss,
+                                    take_profit=signal.take_profit, confidence=signal.confidence,
+                                    final_pct=unified.final_pct,
+                                    smart_money_direction=unified.smart_money_direction,
+                                    smart_money_agreement=unified.smart_money_agreement_count,
+                                    size=size,
+                                )
+                                ts = df.iloc[-1]["timestamp"]
+                                prefix = f"[{sym}] " if multi else ""
+                                print(f"{prefix}[{ts}] SIGNAL {signal.type.value.upper()} "
+                                      f"final {unified.final_pct:.0f}% below auto-fire {auto_fire_pct:.0f}% "
+                                      f"— QUEUED for approval on the control panel")
+                                continue
+                            if venue == "evm" and evm_dex:
+                                evm_dex.open_position(
+                                    side=side,
+                                    entry=signal.entry,
+                                    size_usd=size * signal.entry,
+                                    sl=signal.stop_loss,
+                                    tp=signal.take_profit,
+                                    reason=signal.reason,
+                                )
+                            else:
+                                executor.open_position(
+                                    side=side,
+                                    entry=signal.entry,
+                                    size=size,
+                                    sl=signal.stop_loss,
+                                    tp=signal.take_profit,
+                                    reason=signal.reason,
+                                    symbol=sym,
+                                )
+                            # Explicit, unambiguous marker for a real fire — a dedicated,
+                            # greppable line rather than folding it into the Confidence
+                            # print below, so an external watcher (log tail / alert) can
+                            # key on "LIVE ORDER FIRED" without parsing every line.
+                            prefix = f"[{sym}] " if multi else ""
+                            tag = "LIVE ORDER FIRED" if mode == "live" else "PAPER FILL"
+                            print(f"{prefix}>>> {tag}: {side.upper()} {sym} size={size:.6g} "
+                                  f"entry={signal.entry:.6g} SL={signal.stop_loss:.6g} TP={signal.take_profit:.6g}")
+                            print(f"        Confidence: {signal.confidence:.0%} | Final: {unified.final_pct:.0f}%")
+                            open_count += 1
+                    else:
+                        # SMC found a candidate but the unified gate (structure +
+                        # smart money) rejected it — report whichever layer blocked.
+                        # The no-signal case never reaches here any more; the veto
+                        # above skips the symbol and logs it.
+                        ts = df.iloc[-1]["timestamp"]
+                        prefix = f"[{sym}] " if multi else ""
+                        if not unified.structure_ok:
+                            failed = next((c.name for c in screen_result.checks if not c.passed), "?")
+                            detail = f"rejected at screen: {failed}"
+                        else:
+                            detail = f"rejected: {unified.reason}"
+                        print(f"{prefix}[{ts}] SIGNAL {signal.type.value.upper()} "
+                              f"conf {signal.confidence:.0%} final {unified.final_pct:.0f}% {detail}")
+                except Exception as e:
+                    print(f"[{sym}] Error: {e}")
 
             time.sleep(poll)
 
         except KeyboardInterrupt:
             print("\nBot stopped.")
-            log = executor.trade_log
-            if log:
-                print(f"\nTrade log ({len(log)} events):")
-                for t in log:
-                    print(f"  {t}")
+            for item in watchlist:
+                log = item["executor"].trade_log
+                if log:
+                    print(f"\n[{item['symbol']}] Trade log ({len(log)} events):")
+                    for t in log:
+                        print(f"  {t}")
             break
         except Exception as e:
             print(f"Error: {e}")

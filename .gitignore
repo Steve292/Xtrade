@@ -1,4 +1,7 @@
 venv/
+# Separate venv for the knowledge pipeline (yt-dlp + faster-whisper). Kept out
+# of venv/ so ASR dependencies can never move numpy under the live trader.
+venv-knowledge/
 .env
 __pycache__/
 *.pyc
@@ -7,3 +10,54 @@ __pycache__/
 # DeFi wallet keystore — NEVER commit private keys
 wallet_testnet.json
 *.wallet
+*.bak
+
+# Env file backups/variants — NEVER commit credentials
+.env.save
+.env.local
+.env.bak
+
+# Service logs
+logs/
+
+# Capital guard runtime state (local only, not shared config)
+capital_guard_state.json
+combined_guard_state.json
+combined_guard_state.json.bak.*
+live_state.json
+dominance_history.json
+
+# Personal Claude Code permissions (local-only, not shared project config)
+.claude/settings.local.json
+
+# Local Codex CLI session state (machine-specific, not shared project config)
+.codex/
+
+# Knowledge ingestion (bot/knowledge/) — local only, never shared. Transcripts
+# of third-party videos are derived works we have no right to redistribute, and
+# the corpus is regenerable machine-local data. knowledge_channels.json is a
+# human authorization record; knowledge_candidates.json holds review decisions.
+knowledge_channels.json
+knowledge_candidates.json
+# scripts/knowledge_daemon.py backoff/cycle state. Machine-local, and it must
+# NOT be shared: the backoff counter is how the daemon avoids hammering a
+# source that is already throttling this address.
+knowledge_daemon_state.json
+# Leading slash matters: an unanchored "knowledge/" also matches bot/knowledge/
+# and would silently exclude this feature's entire source tree from the repo.
+/knowledge/
+
+# scripts/replay_mt5.py working directory: the exported MT5 deal history holds
+# real account numbers, balances and tickets, alongside cached OHLCV. Local
+# only, never shared. Same reasoning as the knowledge corpus above.
+/var/
+
+# Stray machine-local files that ended up in the repo root, not project data
+bugreport-sdk_gphone64_arm64-*.zip
+msedgewebview2.dxvk-cache
+settings.dat
+pending_trades.json
+
+# walk_forward.py evaluation ledger: machine-local measurements against a
+# specific account history, not shared state.
+/walk_forward_ledger.json

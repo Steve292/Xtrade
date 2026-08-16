@@ -2,14 +2,19 @@
 Trade screener — the approval gate.
 
 A signal from the SMC strategy is only allowed to trade if it clears EVERY one
-of six checks:
+of seven checks:
 
   1. SMC confluence     — the strategy actually found a scored setup
   2. Top-down alignment — the higher timeframe bias does not oppose the trade
   3. Liquidity sweep     — a stop-hunt in the trade direction is confirmed
   4. Risk management     — reward:risk clears the minimum and the stop is valid
-  5. Sniper entry        — high confluence AND a tight invalidation
-  6. Fibonacci (OTE)     — FINAL gate: entry sits in the 0.618-0.786 golden pocket
+  5. Sniper entry        — high confluence AND the stop within max_stop_pct
+                            (raised to accommodate a fixed 20% stop-loss —
+                            see bot/smc/strategy.py's stop_loss_pct — no
+                            longer "tight" by design, at explicit user
+                            request)
+  6. Supply/Demand       — entry sits at a demand (long) or supply (short) zone
+  7. Fibonacci (OTE)     — FINAL gate: entry sits in the 0.618-0.786 golden pocket
 
 Fibonacci runs last by design: a trade is only approved once everything else
 holds AND price is at the optimal entry in the pocket.
@@ -29,6 +34,7 @@ from bot.smc.fibonacci import ote_band, recent_leg
 from bot.smc.liquidity import detect_liquidity_pools, recent_sweep
 from bot.smc.strategy import Signal, SignalType
 from bot.smc.structure import Trend, detect_trend, find_swing_points
+from bot.smc.supply_demand import detect_supply_demand_zones, nearest_zone
 
 
 @dataclass
@@ -59,12 +65,109 @@ class ScreenConfig:
     min_confidence: float = 0.55
     min_rr: float = 2.0
     sniper_confidence: float = 0.65
-    max_stop_pct: float = 0.02  # tight invalidation for a sniper entry (2%)
+    max_stop_pct: float = 0.25  # raised from 2% to fit the fixed 20% stop-loss + headroom
     ote_low: float = 0.618
     ote_high: float = 0.786
     swing_lookback: int = 5
     liquidity_tolerance_pct: float = 0.0005  # equal-high/low tolerance for pools
     sweep_bars: int = 20  # a liquidity sweep must be this recent to confirm
+
+    # Optional gates 8-10. OFF by default: enabling one adds a check that can
+    # REJECT trades the current seven-gate screen would have approved, which is
+    # a real behaviour change on an armed account. Turn them on deliberately,
+    # one at a time, and walk-forward the result before going live.
+    require_mitigation: bool = False          # entry must sit in a respected zone
+    require_breaker: bool = False             # entry must sit in a retested breaker
+    require_candle_confirmation: bool = False # a candle must confirm the direction
+    candle_lookback: int = 3
+    candle_min_strength: float = 0.0
+    require_wyckoff: bool = False             # range bias must agree with the trade
+    require_value_area_edge: bool = False     # entry must sit at a value-area edge
+    volume_profile_bins: int = 50
+
+    # Gates 13-15, added after comparing gate coverage against what the
+    # 329-document corpus actually emphasises. Each closes a hole where a
+    # heavily-taught concept had no gate at all:
+    #   premium/discount  4 channels, 164 videos, 866 mentions -- scored inside
+    #                     SMCStrategy but never an independent veto
+    #   take profit       4 channels, 263 videos, 2512 mentions -- the SECOND
+    #                     most-discussed concept in the corpus, and gate 4 only
+    #                     checked the RR ratio, never whether the target sits
+    #                     at a level price might actually reach
+    #   consensus         the weighted vote across all ten concepts
+    require_premium_discount: bool = False
+    require_target_at_level: bool = False
+    target_tolerance_pct: float = 0.004
+    # Long below/at VWAP, short above/at it. Buying above the volume-weighted
+    # consensus price is paying more than the average participant.
+    require_vwap_side: bool = False
+    vwap_tolerance_pct: float = 0.002
+    # Minimum bot.smc.consensus score (-1..+1). None disables. This is the
+    # "approve only what the ingested evidence supports" gate: weights come
+    # from cross-channel breadth, so a setup carried by four-educator concepts
+    # scores above one carried by single-source vocabulary.
+    min_consensus_score: float | None = None
+
+    # Which frame the CONCEPT gates (8-15) read. Gates 1-7 are unchanged: gate
+    # 2 has always been the higher-timeframe check and stays that way.
+    #
+    #   "ltf"   entry timeframe only -- the original behaviour, and the default
+    #   "htf"   higher timeframe only
+    #   "both"  must hold on BOTH, which is strictly stricter than either
+    #
+    # This existed as a gap rather than a decision: eleven of the twelve gates
+    # only ever looked at the entry frame, so a setup could satisfy every
+    # concept on the 15m while the 1h said the opposite, and nothing noticed.
+    # "both" is the multi-timeframe confirmation the corpus keeps describing as
+    # top-down analysis -- and it is off by default because requiring agreement
+    # on two frames removes trades, which has to be measured, not assumed.
+    gate_timeframe: str = "ltf"
+
+    # HOW the checks combine.
+    #
+    #   "all"       every check must pass (the original behaviour, default)
+    #   "consensus" checks become evidence, and approval is a weighted score
+    #
+    # Measured, not theorised. On 5,000 bars of XAUUSDc with ATR x2.0 stops the
+    # strategy produced ~100 signals and the seven-gate AND approved TWO. A
+    # per-gate breakdown over 65 sampled signals: Fibonacci OTE blocked 86%,
+    # Supply/Demand 80%, Sniper 29%, Liquidity sweep 26%, Top-down 15%. No
+    # single gate is at fault -- multiply those pass rates and you get ~1.2%,
+    # which is the 1.5% actually observed. Relaxing any ONE gate adds 1-2
+    # trades because the rejections overlap.
+    #
+    # An AND of seven independent-ish conditions cannot produce a tradeable
+    # sample, and a system that never trades cannot be validated either --
+    # every backtest comes back "inconclusive, too few trades", which is
+    # exactly what happened five times before this was found.
+    #
+    # "consensus" keeps every check but stops treating each as a veto: a setup
+    # failing one condition while strongly satisfying the rest can still be
+    # approved. That is the "if one concept fails, can the others validate it"
+    # behaviour, applied to the gates themselves.
+    mode: str = "all"
+    consensus_threshold: float = 0.45   # share of weighted checks that must pass
+    # Checks that remain absolute vetoes even in consensus mode. Risk/reward is
+    # arithmetic, not opinion -- a 1:0.3 trade is bad regardless of how much
+    # else agrees, and letting confluence outvote it would be how a scoring
+    # system quietly reintroduces terrible trades.
+    hard_checks: tuple = ("SMC confluence", "Risk/reward")
+
+    # ADVISORY MODE. When true the screen still runs every check and still
+    # reports an honest `approved`, but the caller is expected not to treat that
+    # verdict as binding -- the gates become INDICATORS and the abstention veto
+    # in bot/trade_review.py becomes the only thing that can stop a trade.
+    #
+    # This flag changes nothing inside screen(). ScreenResult.approved must keep
+    # meaning "did the gates approve", or every log line and test that reads it
+    # starts lying. Honouring it is bot/runner.py's decision, and lives there.
+    #
+    # Why it exists: measured over 3,547 real positions with bootstrap CIs, no
+    # gated configuration could be distinguished from a losing one --
+    # veto+best-half PF 1.093 with a 95% interval of [0.593, 1.862] and an
+    # expectancy indistinguishable from zero. The gates moved PF by +0.03..0.06,
+    # inside the noise, while cutting the sample from 600 trades to ~141.
+    advisory_only: bool = False
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
@@ -74,6 +177,31 @@ class ScreenConfig:
 class TradeScreener:
     def __init__(self, config: ScreenConfig | None = None):
         self.cfg = config or ScreenConfig()
+
+    def _frames(self, df: pd.DataFrame,
+                htf_df: pd.DataFrame) -> list[tuple[str, pd.DataFrame]]:
+        """The frame(s) a concept gate must be satisfied on.
+
+        Returned as (label, frame) so a failure message can name WHICH
+        timeframe disagreed -- "no confirming candle" is far less useful than
+        "no confirming candle on htf".
+        """
+        mode = (self.cfg.gate_timeframe or "ltf").lower()
+        if mode == "htf":
+            return [("htf", htf_df)]
+        if mode == "both":
+            return [("ltf", df), ("htf", htf_df)]
+        return [("ltf", df)]
+
+    @staticmethod
+    def _combine(name: str, results: list[tuple[str, bool, str]]) -> Check:
+        """All frames must agree. Names the frame that failed."""
+        passed = all(ok for _lbl, ok, _d in results)
+        if passed:
+            detail = "; ".join(f"{lbl}: {d}" for lbl, _ok, d in results)
+        else:
+            detail = "; ".join(f"{lbl}: {d}" for lbl, ok, d in results if not ok)
+        return Check(name, passed, detail)
 
     def screen(self, signal: Signal, df: pd.DataFrame, htf_df: pd.DataFrame) -> ScreenResult:
         cfg = self.cfg
@@ -130,10 +258,25 @@ class TradeScreener:
             f"conf {signal.confidence:.0%}, stop {stop_pct:.2%} (max {cfg.max_stop_pct:.0%})",
         ))
 
-        # 6. Fibonacci OTE — the FINAL gate: entry must be in the golden pocket
+        swings = find_swing_points(df, cfg.swing_lookback)
+
+        # 6. Supply & Demand — the entry must sit at a genuine institutional
+        #    zone: a demand zone (long) or supply zone (short) that a prior
+        #    impulse originated from. Structural confirmation that price is at
+        #    a level smart money is likely defending, not mid-air.
+        sd_zones = detect_supply_demand_zones(df, swings)
+        want_zone = "demand" if direction == "long" else "supply"
+        at_zone = nearest_zone(signal.entry, sd_zones, want_zone) is not None
+        n_zones = sum(1 for z in sd_zones if z.kind == want_zone)
+        checks.append(Check(
+            "Supply/Demand", at_zone,
+            f"{'in ' + want_zone + ' zone' if at_zone else 'not at a ' + want_zone + ' zone'} "
+            f"({n_zones} {want_zone} zone{'s' if n_zones != 1 else ''} active)",
+        ))
+
+        # 7. Fibonacci OTE — the FINAL gate: entry must be in the golden pocket
         #    of the recent leg. Runs last so a trade is only approved once every
         #    other condition holds AND price is at the optimal entry.
-        swings = find_swing_points(df, cfg.swing_lookback)
         leg = recent_leg(swings, direction)
         if leg is None:
             checks.append(Check("Fibonacci OTE (final)", False, "no clean leg"))
@@ -144,6 +287,169 @@ class TradeScreener:
                 "Fibonacci OTE (final)", in_zone,
                 f"entry {signal.entry:.4g} vs pocket {lo:.4g}-{hi:.4g}",
             ))
+
+        # --- OPTIONAL gates 8-10, all OFF by default -------------------------
+        #
+        # These append NOTHING unless explicitly enabled, so `all(c.passed)` is
+        # bit-for-bit unchanged for anyone who does not turn them on. Same
+        # convention as bot/capital_guard.py's newer breakers, and the same
+        # reason: both live accounts are armed against real money, so a new
+        # gate must be opt-in rather than something that silently starts
+        # rejecting or approving trades on the next restart.
+        #
+        # Each corresponds to a concept the ingested educator corpus leaned on
+        # heavily while this codebase had no representation of it at all:
+        # mitigation in 143 of 157 videos, breakers in 78, candle-close
+        # confirmation in 49.
+
+        if cfg.require_mitigation:
+            from bot.smc.mitigation import active_mitigation
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                m = active_mitigation(frame, signal.entry, direction,
+                                      lookback=cfg.swing_lookback * 4)
+                res.append((lbl, m is not None,
+                            f"zone {m.bottom:.4g}-{m.top:.4g} respected" if m
+                            else "not in a respected mitigation zone"))
+            checks.append(self._combine("Mitigation", res))
+
+        if cfg.require_breaker:
+            from bot.smc.breaker import active_breaker
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                b = active_breaker(frame, signal.entry, direction,
+                                   lookback=cfg.swing_lookback * 4)
+                res.append((lbl, b is not None,
+                            f"retested zone (was {b.origin_direction})" if b
+                            else "not in a retested breaker zone"))
+            checks.append(self._combine("Breaker", res))
+
+        if cfg.require_candle_confirmation:
+            from bot.smc.candles import confirms
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                p = confirms(frame, direction, lookback=cfg.candle_lookback,
+                             min_strength=cfg.candle_min_strength)
+                res.append((lbl, p is not None,
+                            f"{p.name} ({p.direction} {p.strength:.2f})" if p
+                            else "no confirming candle"))
+            checks.append(self._combine("Candle confirmation", res))
+
+        if cfg.require_wyckoff:
+            from bot.smc.wyckoff import confirms as wyckoff_confirms
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                w = wyckoff_confirms(frame, direction)
+                res.append((lbl, w is not None,
+                            f"{w.bias}, {len(w.events)} event(s)"
+                            if w and w.trading_range
+                            else "no range or bias disagrees"))
+            checks.append(self._combine("Wyckoff", res))
+
+        if cfg.require_value_area_edge:
+            from bot.smc.volume_profile import at_value_area_edge
+            edge_frames = [(lbl, at_value_area_edge(frame, signal.entry,
+                                                   bins=cfg.volume_profile_bins))
+                           for lbl, frame in self._frames(df, htf_df)]
+            edge = edge_frames[0][1]
+            # Long at the LOW edge, short at the HIGH edge. Entering long at the
+            # top of the value area is buying the expensive end of fair value,
+            # which is the opposite of what the range-deviation trades in the
+            # source material do.
+            want = "low" if direction == "long" else "high"
+            checks.append(Check(
+                "Value area edge", edge == want,
+                f"entry at value-area {edge}" if edge
+                else "entry is not at a value-area edge",
+            ))
+
+        if cfg.require_premium_discount:
+            from bot.smc.structure import (is_in_discount, is_in_premium,
+                                           premium_discount_zone)
+            zone = premium_discount_zone(df, swings)
+            if zone is None:
+                checks.append(Check("Premium/Discount", False, "no clean range"))
+            else:
+                ok = (is_in_discount(signal.entry, zone) if direction == "long"
+                      else is_in_premium(signal.entry, zone))
+                side = "discount" if direction == "long" else "premium"
+                checks.append(Check(
+                    "Premium/Discount", ok,
+                    f"entry {'in' if ok else 'NOT in'} {side} "
+                    f"(eq {zone[1]:.4g})",
+                ))
+
+        if cfg.require_target_at_level:
+            # Gate 4 checks the RR RATIO. It never checks that the target is a
+            # place price might actually go. A 1:5 target floating in open air
+            # is arithmetically excellent and practically unreachable -- which
+            # is the same failure mode as the 20% fixed stop, one step later in
+            # the trade.
+            # NO local imports here. detect_liquidity_pools and
+            # detect_supply_demand_zones are already imported at module scope,
+            # and re-importing them inside this branch makes the names LOCAL to
+            # screen() for its whole body -- which broke gate 3 with an
+            # UnboundLocalError even when this gate was switched off. A local
+            # import in one branch silently rebinds a module-level name
+            # everywhere in the function.
+            tol = signal.take_profit * cfg.target_tolerance_pct
+            pools = detect_liquidity_pools(df, cfg.liquidity_tolerance_pct)
+            zones = detect_supply_demand_zones(df, swings)
+            near_pool = any(abs(p.level - signal.take_profit) <= tol for p in pools)
+            near_zone = any(
+                (z.bottom - tol) <= signal.take_profit <= (z.top + tol)
+                for z in zones)
+            hit = near_pool or near_zone
+            checks.append(Check(
+                "Target at a level", hit,
+                ("target sits at " + ("liquidity" if near_pool else "a zone"))
+                if hit else "target is in open air, not at any liquidity or zone",
+            ))
+
+        if cfg.require_vwap_side:
+            from bot.smc.volume_profile import at_vwap
+            res = []
+            for lbl, frame in self._frames(df, htf_df):
+                ok = at_vwap(frame, signal.entry, direction,
+                             tolerance_pct=cfg.vwap_tolerance_pct)
+                res.append((lbl, ok,
+                            "on the right side of VWAP" if ok
+                            else "wrong side of VWAP (or no volume)"))
+            checks.append(self._combine("VWAP side", res))
+
+        if cfg.min_consensus_score is not None:
+            from bot.smc.consensus import evaluate as consensus_evaluate
+            frame = self._frames(df, htf_df)[-1][1]
+            cr = consensus_evaluate(frame, htf_df, direction, signal.entry)
+            ok = (cr.verdict != "no_opinion"
+                  and cr.score >= cfg.min_consensus_score)
+            checks.append(Check(
+                "Concept consensus", ok,
+                f"{cr.verdict} score {cr.score:+.2f} "
+                f"({cr.agreed}a/{cr.dissented}d/{cr.abstained}x, "
+                f"min {cfg.min_consensus_score:+.2f})",
+            ))
+
+        if (cfg.mode or "all").lower() == "consensus":
+            hard = [c for c in checks if c.name in cfg.hard_checks]
+            soft = [c for c in checks if c.name not in cfg.hard_checks]
+            hard_ok = all(c.passed for c in hard)
+            # WEIGHTED by corpus evidence, not a plain count. Counting equally
+            # made the Fibonacci gate (weight 0.29, 25% of documents) worth as
+            # much as structure (1.00, 89%) -- the derived weights existed but
+            # the decision consuming them ignored them entirely.
+            from bot.smc.consensus import check_weight
+            total_w = sum(check_weight(c.name) for c in soft)
+            passed_w = sum(check_weight(c.name) for c in soft if c.passed)
+            share = (passed_w / total_w) if total_w > 0 else 1.0
+            approved = hard_ok and share >= cfg.consensus_threshold
+            checks.append(Check(
+                "Consensus mode", approved,
+                f"{passed_w:.2f}/{total_w:.2f} weighted "
+                f"({share:.0%}, need {cfg.consensus_threshold:.0%})"
+                + ("" if hard_ok else "; a HARD check failed"),
+            ))
+            return ScreenResult(approved, direction, checks)
 
         approved = all(c.passed for c in checks)
         return ScreenResult(approved, direction, checks)

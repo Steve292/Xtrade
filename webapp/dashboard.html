@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>DeFi Wallet · Hyperliquid Perps</title>
+<title>TraderX Control Panel</title>
 <style>
   :root {
     --bg:#0e0f12; --panel:#16181d; --card:#1b1e24; --line:#262a32;
-    --tx:#e8eaed; --mut:#9aa0aa; --up:#1db980; --dn:#e5484d; --acc:#6c5ce7;
+    --tx:#e8eaed; --mut:#9aa0aa; --up:#1db980; --dn:#e5484d; --acc:#6c5ce7; --warn:#e5a94d; --mt5:#3ba7ff;
   }
   @media (prefers-color-scheme: light) {
     :root { --bg:#f5f6f8; --panel:#fff; --card:#fff; --line:#e6e8ec;
@@ -20,250 +20,937 @@
   .wrap { max-width:1040px; margin:0 auto; }
   header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
   h1 { font-size:22px; font-weight:600; margin:0; }
-  .badge { background:rgba(108,92,231,.16); color:var(--acc); font-size:12px;
-    font-weight:600; padding:4px 10px; border-radius:20px; border:1px solid rgba(108,92,231,.35); }
+  .badge { font-size:12px; font-weight:600; padding:4px 10px; border-radius:20px; border:1px solid; }
+  .badge.venue { background:rgba(108,92,231,.16); color:var(--acc); border-color:rgba(108,92,231,.35); }
+  .badge.armed { background:rgba(229,72,77,.16); color:var(--dn); border-color:rgba(229,72,77,.4); }
+  .badge.disarmed { background:rgba(154,160,170,.14); color:var(--mut); border-color:var(--line); }
   .sub { color:var(--mut); font-size:14px; margin:0 0 22px; }
-  .flow { display:flex; gap:10px; flex-wrap:wrap; background:var(--panel);
-    border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:26px; }
-  .step { flex:1; min-width:150px; }
-  .step .n { color:var(--acc); font-weight:700; font-size:12px; }
-  .step .t { font-weight:600; font-size:14px; margin:2px 0; }
-  .step .d { color:var(--mut); font-size:12px; }
-  h2 { font-size:15px; font-weight:600; margin:24px 0 12px; letter-spacing:.02em; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
-  .row1 { display:flex; align-items:center; gap:8px; }
-  .sym { font-weight:600; font-size:15px; }
-  .tag { font-size:10px; text-transform:uppercase; color:var(--mut);
-    border:1px solid var(--line); border-radius:6px; padding:1px 5px; }
-  .lev { margin-left:auto; font-size:11px; color:var(--mut);
-    background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:2px 7px; }
-  .price { font-size:20px; font-weight:600; margin:8px 0 2px; font-variant-numeric:tabular-nums; }
-  .chg { font-size:12px; font-weight:600; }
-  .up { color:var(--up); } .dn { color:var(--dn); }
-  .btns { display:flex; gap:8px; margin-top:12px; }
-  .btns button { flex:1; border:none; border-radius:9px; padding:8px 0; font-weight:600;
-    font-size:13px; cursor:pointer; color:#fff; }
-  .long { background:var(--up); } .short { background:var(--dn); }
-  .btns button:active { transform:scale(.97); }
-  footer { color:var(--mut); font-size:12px; margin-top:30px; text-align:center; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:16px 18px; margin-bottom:20px; }
+  h2 { font-size:15px; font-weight:600; margin:0 0 14px; letter-spacing:.02em; display:flex;
+    align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .stat-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:10px; margin-bottom:6px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .stat .l { font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.03em; }
+  .stat .v { font-size:18px; font-weight:600; margin-top:2px; font-variant-numeric:tabular-nums; }
+  button { border:none; border-radius:9px; padding:9px 16px; font-weight:600; font-size:13px;
+    cursor:pointer; color:#fff; background:var(--acc); }
+  button:active { transform:scale(.97); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.danger { background:var(--dn); }
+  button.ghost { background:var(--card); color:var(--tx); border:1px solid var(--line); }
+  .toggle { position:relative; width:46px; height:26px; border-radius:14px; background:var(--card);
+    border:1px solid var(--line); cursor:pointer; flex-shrink:0; padding:0; appearance:none; }
+  .toggle .knob { position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%;
+    background:var(--mut); transition:.15s; }
+  .toggle.on { background:rgba(229,72,77,.25); border-color:var(--dn); }
+  .toggle.on .knob { transform:translateX(20px); background:var(--dn); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; color:var(--mut); font-weight:600; font-size:11px; text-transform:uppercase;
+    letter-spacing:.02em; padding:6px 8px; border-bottom:1px solid var(--line); }
+  td { padding:8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  tr:last-child td { border-bottom:none; }
+  .up { color:var(--up); } .dn { color:var(--dn); } .mut { color:var(--mut); }
+  .pill { font-size:10px; text-transform:uppercase; padding:2px 7px; border-radius:6px; font-weight:700; }
+  .venue-tag { font-size:10px; text-transform:uppercase; padding:2px 7px; border-radius:6px; font-weight:700; margin-right:4px; }
+  .venue-tag.mt5 { background:rgba(59,167,255,.16); color:var(--mt5); }
+  .venue-tag.hl { background:rgba(108,92,231,.18); color:var(--acc); }
+  .pill.approved { background:rgba(29,185,128,.16); color:var(--up); }
+  .pill.rejected { background:rgba(154,160,170,.14); color:var(--mut); }
+  .pill.error { background:rgba(229,72,77,.16); color:var(--dn); }
+  .fire-btn { padding:5px 12px; font-size:12px; }
+  .checks { font-size:11px; color:var(--mut); margin-top:2px; }
+  .empty { color:var(--mut); font-size:13px; padding:14px 4px; }
+  footer { color:var(--mut); font-size:12px; margin-top:10px; text-align:center; }
   #toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%);
     background:var(--acc); color:#fff; padding:10px 16px; border-radius:10px;
-    font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; }
+    font-size:13px; opacity:0; transition:opacity .2s; pointer-events:none; max-width:80vw; }
   #toast.show { opacity:1; }
+  #toast.err { background:var(--dn); }
+
+  /* --- pending approval queue --- */
+  .pend { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:12px; }
+  .pend-card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:13px 14px; }
+  .pend-card.expiring { border-color:rgba(229,169,77,.55); }
+  .pend-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .pend-sym { font-weight:700; font-size:15px; }
+  .pend-score { margin-left:auto; font-variant-numeric:tabular-nums; font-weight:700; font-size:15px; }
+  .pend-meta { font-size:12px; color:var(--mut); line-height:1.65; font-variant-numeric:tabular-nums; }
+  .pend-actions { display:flex; gap:8px; margin-top:11px; }
+  .pend-actions button { flex:1; padding:8px 10px; font-size:13px; }
+  .badge.pending { background:rgba(229,169,77,.16); color:var(--warn); border-color:rgba(229,169,77,.4); }
+  .ttl { font-variant-numeric:tabular-nums; }
+  .ttl.soon { color:var(--warn); font-weight:600; }
+
+  /* Phones: stack the scan table's wide columns instead of overflowing, and
+     give the approve/cancel buttons a full-width tap target. */
+  @media (max-width:560px) {
+    body { padding:18px 12px 48px; }
+    .pend { grid-template-columns:1fr; }
+    .pend-actions { flex-direction:column; }
+    .stat-row { grid-template-columns:repeat(auto-fit,minmax(108px,1fr)); }
+    table { font-size:12px; }
+    th, td { padding:6px 5px; }
+  }
+  /* Any table that still can't fit scrolls on its own rather than forcing
+     the whole page sideways. */
+  .table-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
+  /* --- motion: sections settle in on load, live sections pulse a dot,
+     values flash briefly when a poll actually changes them. Respects
+     prefers-reduced-motion — this is a control panel, not a demo reel. */
+  @media (prefers-reduced-motion: no-preference) {
+    section { animation: rise .5s cubic-bezier(.16,1,.3,1) both; }
+    section:nth-of-type(1) { animation-delay: 0s; }
+    section:nth-of-type(2) { animation-delay: .04s; }
+    section:nth-of-type(3) { animation-delay: .08s; }
+    section:nth-of-type(4) { animation-delay: .12s; }
+    section:nth-of-type(5) { animation-delay: .16s; }
+    section:nth-of-type(6) { animation-delay: .2s; }
+    section:nth-of-type(7) { animation-delay: .24s; }
+    section:nth-of-type(8) { animation-delay: .28s; }
+  }
+  @keyframes rise {
+    from { opacity:0; transform:translateY(10px); }
+    to { opacity:1; transform:translateY(0); }
+  }
+  .live-dot { display:inline-block; width:7px; height:7px; border-radius:50%;
+    background:var(--up); margin-right:6px; position:relative; top:-1px;
+    box-shadow:0 0 0 0 rgba(29,185,128,.55); animation:live-pulse 2s ease-out infinite; }
+  @keyframes live-pulse {
+    0%   { box-shadow:0 0 0 0 rgba(29,185,128,.55); }
+    70%  { box-shadow:0 0 0 6px rgba(29,185,128,0); }
+    100% { box-shadow:0 0 0 0 rgba(29,185,128,0); }
+  }
+  @keyframes value-flash {
+    0%   { color:var(--acc); }
+    100% { color:inherit; }
+  }
+  .flash { animation:value-flash 900ms ease-out; }
+  .stat .v, td { transition:color .3s ease; }
+  button, .toggle .knob, .pill, .badge { transition:background-color .18s ease, color .18s ease, border-color .18s ease, transform .1s ease; }
+  tr { transition:background-color .2s ease; }
+  /* Every scan/positions/signals/mcap tbody and every pending card is fully
+     torn down and rebuilt on each poll — animating them unconditionally
+     (rather than diffing) is what makes each refresh read as a live update
+     instead of a jump-cut, with zero extra JS bookkeeping per call site. */
+  @media (prefers-reduced-motion: no-preference) {
+    tbody tr, .pend-card { animation:row-in .35s cubic-bezier(.16,1,.3,1) both; }
+  }
+  @keyframes row-in {
+    from { opacity:0; transform:translateY(4px); }
+    to   { opacity:1; transform:translateY(0); }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <nav style="display:flex;gap:10px;margin-bottom:14px;">
+    <a href="/" style="color:var(--tx);background:var(--card);border-color:var(--acc);text-decoration:none;font-size:13px;font-weight:600;padding:7px 13px;border-radius:8px;border:1px solid var(--line);">Control Panel</a>
+    <a href="/performance" style="color:var(--mut);text-decoration:none;font-size:13px;font-weight:600;padding:7px 13px;border-radius:8px;border:1px solid var(--line);">Performance</a>
+  </nav>
   <header>
-    <h1>DeFi Wallet · Hyperliquid Perps</h1>
-    <span class="badge">TESTNET</span>
+    <h1>TraderX Control Panel</h1>
+    <span class="badge venue" id="venueBadge">…</span>
+    <span class="badge disarmed" id="armedBadge">…</span>
   </header>
-  <p class="sub">Long / short BTC, ETH, SOL, HYPE, gold &amp; XMR, plus memecoins — 209 markets, one self-custody wallet. Live testnet prices.</p>
+  <p class="sub">Seven-gate screened auto-trader on Hyperliquid — this panel reads/controls the live venue directly.</p>
 
-  <div class="flow">
-    <div class="step"><div class="n">01 · DEPOSIT</div><div class="t">Create wallet</div><div class="d">python hyperwallet.py create</div></div>
-    <div class="step"><div class="n">02 · FUND</div><div class="t">Faucet → 1,000 USDC</div><div class="d">free testnet funds</div></div>
-    <div class="step"><div class="n">03 · TRADE</div><div class="t">Long / short, $10 min</div><div class="d">up to 40x leverage</div></div>
-  </div>
+  <section>
+    <h2><span class="live-dot" title="Live — polled from the venue directly"></span>Account</h2>
+    <div class="stat-row" id="statusStats">
+      <div class="stat"><div class="l">Account value</div><div class="v" id="statAccountValue">—</div></div>
+      <div class="stat"><div class="l">Withdrawable</div><div class="v" id="statWithdrawable">—</div></div>
+      <div class="stat"><div class="l">Open positions</div><div class="v" id="statPositions">—</div></div>
+      <div class="stat"><div class="l">Watchlist</div><div class="v" id="statWatchlist">—</div></div>
+    </div>
+    <p class="sub" id="guardStatus" style="margin:10px 0 0;"></p>
+  </section>
 
-  <h2>MAJORS</h2>
-  <div class="grid">
-    <div class="card">
-      <div class="row1"><span class="sym">BTC</span><span class="lev">40x</span></div>
-      <div class="price">$63,648.70</div>
-      <div class="chg dn">-0.57% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','BTC')">Long</button>
-        <button class="short" onclick="cmd('short','BTC')">Short</button>
+  <section>
+    <h2>
+      <span><span class="live-dot" title="Live — CoinGecko/Yahoo/CoinTelegraph, cached 15m"></span>Market Regime</span>
+      <span class="sub" style="margin:0;font-weight:400;">informational only — not wired into sizing or entries yet</span>
+    </h2>
+    <div class="stat-row" id="regimeStats">
+      <div class="stat"><div class="l">Regime</div><div class="v" id="regimeLabel">—</div></div>
+      <div class="stat"><div class="l">Regime score</div><div class="v" id="regimeScore">—</div></div>
+      <div class="stat"><div class="l">Hotness signal</div><div class="v" id="hotnessSignal">—</div></div>
+      <div class="stat"><div class="l">Meme season</div><div class="v" id="memeZone">—</div></div>
+    </div>
+    <p class="sub" id="regimeDetail" style="margin:10px 0 0;"></p>
+    <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div style="font-size:13px;font-weight:600;">Smart money (BTC) — 9 modules</div>
+        <div id="smartMoneyVote" style="font-size:13px;font-weight:700;">—</div>
+      </div>
+      <div id="smartMoneyModules" class="sub" style="margin:8px 0 0;display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <div id="newsHeadlines" class="sub" style="margin:8px 0 0;"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>
+      <span><span class="live-dot" title="Live — CoinGecko, cached 60s"></span>Top by Market Cap</span>
+      <span class="sub" style="margin:0;font-weight:400;">CoinGecko leaderboard, same table as CoinMarketCap's homepage — display only, not the trading watchlist</span>
+    </h2>
+    <div class="table-scroll">
+    <table id="topMcapTable">
+      <thead><tr><th>#</th><th>Coin</th><th>Price</th><th>24h %</th><th>Market Cap</th><th>Volume (24h)</th></tr></thead>
+      <tbody id="topMcapBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>
+      <span><span class="live-dot" title="Live — Binance, cached 30s"></span>Watchlist</span>
+      <span class="sub" style="margin:0;font-weight:400;">exactly the coins this bot trades (config.yaml majors + memecoins) — click a row for its live chart</span>
+    </h2>
+    <div class="table-scroll">
+    <table id="watchlistTable">
+      <thead><tr><th>Coin</th><th>Price</th><th>24h %</th><th>High</th><th>Low</th><th>Volume (24h)</th></tr></thead>
+      <tbody id="watchlistBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section id="coinDetailSection" style="display:none;">
+    <h2>
+      <span><span class="live-dot" title="Live"></span><span id="coinDetailTitle">Coin detail</span></span>
+      <button class="ghost" onclick="closeCoinDetail()" style="padding:6px 12px;font-size:12px;">Close</button>
+    </h2>
+    <div class="stat-row" id="coinDetailStats">
+      <div class="stat"><div class="l">Price</div><div class="v" id="coinDetailPrice">—</div></div>
+      <div class="stat"><div class="l">Change (window)</div><div class="v" id="coinDetailChange">—</div></div>
+      <div class="stat"><div class="l">High</div><div class="v" id="coinDetailHigh">—</div></div>
+      <div class="stat"><div class="l">Low</div><div class="v" id="coinDetailLow">—</div></div>
+    </div>
+    <div id="coinDetailChart" style="margin-top:12px;"></div>
+    <p class="empty" id="coinDetailEmpty" style="display:none;">No chart data available.</p>
+  </section>
+
+  <section>
+    <h2>
+      BTC Majors Checklist &amp; Suggested Sizing
+      <span class="sub" style="margin:0;font-weight:400;">Section 5/6 — a second, independent classic-TA opinion; not the live entry logic</span>
+    </h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+      <div id="majorModules" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <div id="majorVerdict" style="font-size:13px;font-weight:700;">—</div>
+    </div>
+    <div class="stat-row" style="margin-top:12px;">
+      <div class="stat"><div class="l">Suggested risk %</div><div class="v" id="suggestedRiskPct">—</div></div>
+      <div class="stat"><div class="l">Stop-loss</div><div class="v" id="majorSl">—</div></div>
+      <div class="stat"><div class="l">Trail (ATR mult.)</div><div class="v" id="majorTrail">—</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>
+      <span><span class="live-dot" title="Live — polled from the MT5 bridge directly"></span>MT5 Watchlist Signals</span>
+      <span class="sub" style="margin:0;font-weight:400;">CVD/heatmap/SMC+Fib/session only — GEX, SSR, meme score, BTC.D have no forex/commodity equivalent</span>
+    </h2>
+    <div class="table-scroll">
+    <table id="mt5SignalsTable">
+      <thead><tr><th>Symbol</th><th>Vote</th><th>CVD</th><th>Heatmap</th><th>SMC+Fib</th><th>Session</th><th>Suggested risk %</th></tr></thead>
+      <tbody id="mt5SignalsBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>
+      Activate
+      <span style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:400;color:var(--mut);">
+        <span id="armedLabel">loading…</span>
+        <button class="toggle" id="armedToggle" role="switch" aria-checked="false"
+          aria-label="Arm live trading" onclick="toggleArmed()"><span class="knob"></span></button>
+      </span>
+    </h2>
+    <p class="sub" style="margin:0 0 14px;">
+      When <b>OFF</b>, the 24/7 loop screens continuously but never places an order.
+      When <b>ON</b>, any signal that clears all seven gates <b>and</b> meets the authorization
+      floor below fires automatically — same as manually firing, on the bot's 30-second schedule.
+    </p>
+    <div style="border-top:1px solid var(--line);padding-top:12px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:13px;font-weight:600;">Authorization floor</div>
+          <div class="sub" style="margin:2px 0 0;">Only signals at or above this confidence auto-fire. Higher = only the strongest setups.</div>
+        </div>
+        <div style="font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;" id="thresholdValue">—</div>
+      </div>
+      <div id="thresholdBtns" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button class="ghost thr-btn" data-thr="0">Off (config floor)</button>
+        <button class="ghost thr-btn" data-thr="0.55">55%</button>
+        <button class="ghost thr-btn" data-thr="0.65">65%</button>
+        <button class="ghost thr-btn" data-thr="0.75">75%</button>
+        <button class="ghost thr-btn" data-thr="0.85">85%</button>
+        <button class="ghost thr-btn" data-thr="0.90">90%</button>
       </div>
     </div>
 
-    <div class="card">
-      <div class="row1"><span class="sym">ETH</span><span class="lev">25x</span></div>
-      <div class="price">$1,781.70</div>
-      <div class="chg dn">-4.16% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','ETH')">Long</button>
-        <button class="short" onclick="cmd('short','ETH')">Short</button>
+    <div style="border-top:1px solid var(--line);padding-top:12px;margin-top:14px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:13px;font-weight:600;">Auto-fire threshold</div>
+          <div class="sub" style="margin:2px 0 0;">
+            Measured on the blended <b>final %</b> (confidence + smart-money agreement).
+            At or above it, trades fire hands-off. Below it, they queue for your Approve/Cancel.
+          </div>
+        </div>
+        <div style="font-size:22px;font-weight:700;font-variant-numeric:tabular-nums;" id="autoFireValue">—</div>
+      </div>
+      <div id="autoFireBtns" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button class="ghost af-btn" data-af="70">70%</button>
+        <button class="ghost af-btn" data-af="80">80%</button>
+        <button class="ghost af-btn" data-af="90">90%</button>
+        <button class="ghost af-btn" data-af="95">95%</button>
+        <button class="ghost af-btn" data-af="100">Review everything</button>
       </div>
     </div>
+  </section>
 
-    <div class="card">
-      <div class="row1"><span class="sym">SOL</span><span class="lev">10x</span></div>
-      <div class="price">$79.20</div>
-      <div class="chg dn">-3.10% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','SOL')">Long</button>
-        <button class="short" onclick="cmd('short','SOL')">Short</button>
-      </div>
+  <section>
+    <h2>
+      Pending approval
+      <span style="display:flex;align-items:center;gap:10px;font-size:13px;font-weight:400;color:var(--mut);">
+        <span id="pendingCount">—</span>
+        <button class="ghost" onclick="refreshPending()" style="padding:6px 12px;font-size:12px;">Refresh</button>
+      </span>
+    </h2>
+    <p class="sub" style="margin:0 0 12px;">
+      Setups that cleared every gate but scored below the auto-fire threshold. Approving
+      <b>re-screens against live prices</b> before sending — a setup that has since gone stale is
+      dropped, never fired on old data. Entries expire on their own after 15 minutes.
+    </p>
+    <div class="pend" id="pendingBody"></div>
+    <div class="empty" id="pendingEmpty">Nothing awaiting approval.</div>
+  </section>
+
+  <section>
+    <h2>
+      Scan
+      <span style="display:flex;gap:8px;">
+        <button class="ghost" onclick="fireSelected()" id="fireSelectedBtn" disabled>Fire selected (0)</button>
+        <button onclick="runScan()" id="scanBtn">Scan now</button>
+      </span>
+    </h2>
+    <p class="sub" style="margin:0 0 12px;">
+      Scan requires BOTH the seven-gate structure screen AND smart money (9-module aggregate) to
+      clear before a setup is approved — the "final %" blends signal confidence with smart-money
+      agreement. Tick the approved setups you want, then
+      <b>Fire selected</b> — each is re-validated (unified gate + armed + guard) server-side before it sends.
+    </p>
+    <table id="scanTable">
+      <thead><tr><th style="width:28px;"><input type="checkbox" id="selectAll" onclick="toggleSelectAll()" title="Select all approved"></th><th>Coin</th><th>Signal</th><th>Conf.</th><th>Verdict</th><th></th></tr></thead>
+      <tbody id="scanBody"><tr><td colspan="6" class="empty">Click "Scan now" to run the unified structure + smart-money gate against live data.</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Open positions</h2>
+    <div class="table-scroll">
+    <table id="posTable">
+      <thead><tr><th>Coin</th><th>Side</th><th>Size</th><th>Entry</th><th>uPnL</th><th>Lev</th><th>SL / TP</th></tr></thead>
+      <tbody id="posBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
     </div>
+  </section>
 
-    <div class="card">
-      <div class="row1"><span class="sym">HYPE</span><span class="lev">10x</span></div>
-      <div class="price">$52.09</div>
-      <div class="chg dn">-17.91% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','HYPE')">Long</button>
-        <button class="short" onclick="cmd('short','HYPE')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">XMR</span><span class="tag">monero</span><span class="lev">5x</span></div>
-      <div class="price">$336.39</div>
-      <div class="chg up">+3.98% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','XMR')">Long</button>
-        <button class="short" onclick="cmd('short','XMR')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">PAXG</span><span class="tag">gold</span><span class="lev">10x</span></div>
-      <div class="price">$4,108.80</div>
-      <div class="chg dn">-0.81% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','PAXG')">Long</button>
-        <button class="short" onclick="cmd('short','PAXG')">Short</button>
-      </div>
-    </div></div>
-
-  <h2>MEMECOINS</h2>
-  <div class="grid">
-    <div class="card">
-      <div class="row1"><span class="sym">kPEPE</span><span class="lev">10x</span></div>
-      <div class="price">$0.002670</div>
-      <div class="chg dn">-1.58% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','kPEPE')">Long</button>
-        <button class="short" onclick="cmd('short','kPEPE')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">WIF</span><span class="lev">5x</span></div>
-      <div class="price">$0.165825</div>
-      <div class="chg dn">-2.03% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','WIF')">Long</button>
-        <button class="short" onclick="cmd('short','WIF')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">POPCAT</span><span class="lev">5x</span></div>
-      <div class="price">$0.047061</div>
-      <div class="chg dn">-4.71% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','POPCAT')">Long</button>
-        <button class="short" onclick="cmd('short','POPCAT')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">FARTCOIN</span><span class="lev">10x</span></div>
-      <div class="price">$0.153900</div>
-      <div class="chg dn">-5.94% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','FARTCOIN')">Long</button>
-        <button class="short" onclick="cmd('short','FARTCOIN')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">TRUMP</span><span class="lev">10x</span></div>
-      <div class="price">$1.64</div>
-      <div class="chg dn">-2.59% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','TRUMP')">Long</button>
-        <button class="short" onclick="cmd('short','TRUMP')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">DOGE</span><span class="lev">10x</span></div>
-      <div class="price">$0.074046</div>
-      <div class="chg dn">-3.02% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','DOGE')">Long</button>
-        <button class="short" onclick="cmd('short','DOGE')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">GOAT</span><span class="lev">5x</span></div>
-      <div class="price">$0.014296</div>
-      <div class="chg dn">-0.29% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','GOAT')">Long</button>
-        <button class="short" onclick="cmd('short','GOAT')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">MOODENG</span><span class="lev">3x</span></div>
-      <div class="price">$0.040165</div>
-      <div class="chg dn">-5.00% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','MOODENG')">Long</button>
-        <button class="short" onclick="cmd('short','MOODENG')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">PNUT</span><span class="lev">5x</span></div>
-      <div class="price">$0.043740</div>
-      <div class="chg dn">-0.77% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','PNUT')">Long</button>
-        <button class="short" onclick="cmd('short','PNUT')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">kBONK</span><span class="lev">5x</span></div>
-      <div class="price">$0.004164</div>
-      <div class="chg dn">-6.57% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','kBONK')">Long</button>
-        <button class="short" onclick="cmd('short','kBONK')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">kSHIB</span><span class="lev">10x</span></div>
-      <div class="price">$0.004394</div>
-      <div class="chg dn">-0.59% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','kSHIB')">Long</button>
-        <button class="short" onclick="cmd('short','kSHIB')">Short</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row1"><span class="sym">MELANIA</span><span class="lev">3x</span></div>
-      <div class="price">$0.082980</div>
-      <div class="chg dn">-1.62% 24h</div>
-      <div class="btns">
-        <button class="long" onclick="cmd('long','MELANIA')">Long</button>
-        <button class="short" onclick="cmd('short','MELANIA')">Short</button>
-      </div>
-    </div></div>
-
-  <footer>Hyperliquid testnet · api.hyperliquid-testnet.xyz · prices at build time · not financial advice</footer>
+  <footer>Local control panel · 127.0.0.1 only · not financial advice</footer>
 </div>
 <div id="toast"></div>
 <script>
-  function cmd(side, coin) {
-    var lev = coin === 'BTC' ? 5 : 3;
-    var c = 'python hyperwallet.py ' + side + ' ' + coin + ' 50 --lev ' + lev;
-    try { navigator.clipboard.writeText(c); } catch (e) {}
-    var t = document.getElementById('toast');
-    t.textContent = 'Copied:  ' + c;
-    t.classList.add('show');
-    clearTimeout(window._tt); window._tt = setTimeout(function(){ t.classList.remove('show'); }, 2200);
+function toast(msg, isErr) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = isErr ? 'show err' : 'show';
+  clearTimeout(window._tt);
+  window._tt = setTimeout(function(){ t.className = ''; }, 3200);
+}
+
+function fmtUsd(v) {
+  if (v === null || v === undefined) return '—';
+  return (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function fmtNum(v, d) {
+  if (v === null || v === undefined) return '—';
+  return Number(v).toLocaleString(undefined, {maximumFractionDigits: d || 6});
+}
+
+function setVal(el, text) {
+  // Briefly flashes the value on an actual change — a poll that returns the
+  // same number shouldn't animate, only a real update should.
+  if (el.textContent === text) return;
+  el.textContent = text;
+  el.classList.remove('flash');
+  void el.offsetWidth; // restart the animation if it's still running from the last poll
+  el.classList.add('flash');
+}
+
+async function api(path, opts) {
+  var res = await fetch(path, opts);
+  var data = await res.json().catch(function(){ return {}; });
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+async function refreshStatus() {
+  try {
+    var s = await api('/api/status');
+    document.getElementById('venueBadge').textContent = s.venue.toUpperCase();
+    var armedBadge = document.getElementById('armedBadge');
+    armedBadge.textContent = s.armed ? 'ARMED — LIVE' : 'DISARMED';
+    armedBadge.className = 'badge ' + (s.armed ? 'armed' : 'disarmed');
+    document.getElementById('armedLabel').textContent = s.armed ? 'Armed' : 'Disarmed';
+    var toggle = document.getElementById('armedToggle');
+    toggle.className = 'toggle' + (s.armed ? ' on' : '');
+    toggle.setAttribute('aria-checked', s.armed ? 'true' : 'false');
+    setVal(document.getElementById('statAccountValue'), fmtUsd(s.account_value));
+    setVal(document.getElementById('statWithdrawable'), fmtUsd(s.withdrawable));
+    setVal(document.getElementById('statPositions'), String(s.open_positions));
+    setVal(document.getElementById('statWatchlist'), s.watchlist_size + ' coins');
+    window._armed = s.armed;
+    renderThreshold(s.min_confidence, s.config_min_confidence);
+    renderAutoFire(s.auto_fire_pct);
+
+    var guardEl = document.getElementById('guardStatus');
+    var guard = s.capital_guard || {};
+    if (guard.halted) {
+      guardEl.innerHTML = '<span class="dn">Capital guard: HALTED</span> — ' + (guard.halt_reason || 'no reason given');
+    } else {
+      guardEl.innerHTML = '<span class="up">Capital guard: OK</span>' +
+        (guard.size_multiplier && guard.size_multiplier !== 1 ? ' — size multiplier ' + guard.size_multiplier + 'x (consecutive-loss halving active)' : '');
+    }
+  } catch (e) { toast('status: ' + e.message, true); }
+}
+
+function titleCase(s) {
+  return (s || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, function(c){ return c.toUpperCase(); });
+}
+
+async function refreshRegime() {
+  try {
+    var d = await api('/api/regime');
+    var regimeEl = document.getElementById('regimeLabel');
+    regimeEl.textContent = titleCase(d.regime.label);
+    regimeEl.className = 'v ' + (d.regime.label.indexOf('RISK_ON') === 0 ? 'up' : d.regime.label === 'RISK_OFF' ? 'dn' : 'mut');
+    setVal(document.getElementById('regimeScore'), Math.round(d.regime.score) + ' / 100');
+
+    var hotEl = document.getElementById('hotnessSignal');
+    hotEl.textContent = titleCase(d.hotness.signal);
+    hotEl.className = 'v ' + (d.hotness.multiplier > 1 ? 'up' : d.hotness.multiplier === 0 ? 'dn' : 'mut');
+
+    document.getElementById('memeZone').textContent = titleCase(d.meme_score.zone) + ' (' + Math.round(d.meme_score.score) + ')';
+
+    var missing = (d.regime.missing || []).length;
+    var ageMin = d.fetched_at ? Math.round((Date.now()/1000 - d.fetched_at) / 60) : null;
+    document.getElementById('regimeDetail').textContent =
+      d.meme_score.action +
+      (missing ? ' · ' + missing + ' macro input(s) unavailable (no free data source)' : '') +
+      (ageMin !== null ? ' · updated ' + (ageMin <= 0 ? 'just now' : ageMin + 'm ago') : '');
+
+    var sm = d.smart_money;
+    var voteEl = document.getElementById('smartMoneyVote');
+    voteEl.textContent = titleCase(sm.direction) + ' (' + sm.bullish_count + 'v' + sm.bearish_count + ', ' + sm.multiplier + 'x)';
+    voteEl.className = sm.direction === 'BULLISH' ? 'up' : sm.direction === 'BEARISH' ? 'dn' : 'mut';
+
+    var modsEl = document.getElementById('smartMoneyModules');
+    modsEl.innerHTML = '';
+    Object.keys(sm.modules).forEach(function(name) {
+      var mod = sm.modules[name];
+      var span = document.createElement('span');
+      span.className = 'pill ' + (mod.signal === 'BUY' ? 'approved' : mod.signal === 'SELL' ? 'error' : 'rejected');
+      span.textContent = titleCase(name).replace('Smc Fib', 'SMC+Fib').replace('Cvd', 'CVD').replace('Gex', 'GEX') + ': ' + titleCase(mod.signal);
+      modsEl.appendChild(span);
+    });
+
+    var news = d.regulatory_news;
+    var newsEl = document.getElementById('newsHeadlines');
+    if (news && news.relevant_headlines && news.relevant_headlines.length) {
+      newsEl.innerHTML = '<b>Regulatory news evidence</b> (keyword heuristic, not NLP sentiment):<br>' +
+        news.relevant_headlines.map(function(h) {
+          var cls = h.tilt === 'bullish' ? 'up' : h.tilt === 'bearish' ? 'dn' : 'mut';
+          return '<span class="' + cls + '">[' + h.tilt + ']</span> ' + h.title;
+        }).join('<br>');
+    } else {
+      newsEl.textContent = 'No relevant regulatory/legislative headlines in the current feed.';
+    }
+
+    var major = d.entry_rules_major;
+    var verdictEl = document.getElementById('majorVerdict');
+    verdictEl.textContent = titleCase(major.verdict);
+    verdictEl.className = major.verdict === 'BUY' ? 'up' : major.verdict === 'NO_SETUP' ? 'dn' : 'mut';
+    var majorModsEl = document.getElementById('majorModules');
+    majorModsEl.innerHTML = '';
+    major.checks.forEach(function(c) {
+      var label = c.passed === true ? 'pass' : c.passed === false ? 'fail' : 'n/a';
+      var pillClass = c.passed === true ? 'approved' : c.passed === false ? 'error' : 'rejected';
+      var span = document.createElement('span');
+      span.className = 'pill ' + pillClass;
+      span.title = c.detail || '';
+      span.textContent = titleCase(c.name.replace(/_/g, ' ')) + ': ' + label;
+      majorModsEl.appendChild(span);
+    });
+    document.getElementById('majorSl').textContent = major.stop_loss_pct + '%';
+    document.getElementById('majorTrail').textContent = major.trail_atr_mult ? major.trail_atr_mult + 'x ATR' : '—';
+
+    var sizing = d.suggested_sizing;
+    document.getElementById('suggestedRiskPct').textContent = sizing.final_risk_pct.toFixed(2) + '%';
+
+    renderMt5Signals(d.mt5_watchlist_analysis || []);
+  } catch (e) { toast('regime: ' + e.message, true); }
+}
+
+function moduleCell(mod) {
+  if (!mod) return '<span class="mut">—</span>';
+  var cls = mod.signal === 'BUY' ? 'up' : mod.signal === 'SELL' ? 'dn' : 'mut';
+  return '<span class="' + cls + '">' + titleCase(mod.signal) + '</span>';
+}
+
+function renderMt5Signals(rows) {
+  var body = document.getElementById('mt5SignalsBody');
+  body.innerHTML = '';
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">No MT5 watchlist configured.</td></tr>';
+    return;
   }
+  rows.forEach(function(r) {
+    var tr = document.createElement('tr');
+    if (r.error) {
+      tr.innerHTML = '<td><b>' + (r.symbol || '?') + '</b></td><td colspan="6" class="mut">' + r.error + '</td>';
+      body.appendChild(tr);
+      return;
+    }
+    var sm = r.smart_money;
+    var voteCls = sm.direction === 'BULLISH' ? 'up' : sm.direction === 'BEARISH' ? 'dn' : 'mut';
+    var voteHtml = '<span class="' + voteCls + '">' + titleCase(sm.direction) + '</span>' +
+      ' <span class="mut">(' + sm.bullish_count + 'v' + sm.bearish_count + ', ' + sm.multiplier + 'x)</span>';
+    var sizingHtml = r.suggested_sizing ? r.suggested_sizing.final_risk_pct.toFixed(2) + '%' : '<span class="mut">n/a (no forex bucket)</span>';
+    tr.innerHTML =
+      '<td><b>' + r.symbol + '</b></td>' +
+      '<td>' + voteHtml + '</td>' +
+      '<td>' + moduleCell(sm.modules.cvd) + '</td>' +
+      '<td>' + moduleCell(sm.modules.liquidation_heatmap) + '</td>' +
+      '<td>' + moduleCell(sm.modules.smc_fib) + '</td>' +
+      '<td>' + moduleCell(sm.modules.session) + '</td>' +
+      '<td>' + sizingHtml + '</td>';
+    tr.style.cursor = 'pointer';
+    tr.title = 'Click for ' + r.symbol + '\'s live chart';
+    tr.onclick = function() { openCoinDetail(r.symbol, 'mt5'); };
+    body.appendChild(tr);
+  });
+}
+
+function renderThreshold(floor, configFloor) {
+  var pct = Math.round((floor || 0) * 100);
+  var label = document.getElementById('thresholdValue');
+  if (!floor || floor <= 0) {
+    label.textContent = 'Config (' + Math.round((configFloor || 0.55) * 100) + '%)';
+  } else {
+    label.textContent = pct + '%';
+  }
+  document.querySelectorAll('.thr-btn').forEach(function(b) {
+    var v = parseFloat(b.getAttribute('data-thr'));
+    var active = Math.abs(v - (floor || 0)) < 1e-6;
+    b.style.background = active ? 'var(--acc)' : 'var(--card)';
+    b.style.color = active ? '#fff' : 'var(--tx)';
+    b.style.borderColor = active ? 'var(--acc)' : 'var(--line)';
+  });
+}
+
+async function setThreshold(value) {
+  try {
+    await api('/api/threshold', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({min_confidence: value})});
+    toast(value > 0 ? ('Authorization floor set to ' + Math.round(value*100) + '%') : 'Authorization floor off (config floor only)');
+    refreshStatus();
+  } catch (e) { toast('threshold: ' + e.message, true); }
+}
+
+async function toggleArmed() {
+  var next = !window._armed;
+  if (next && !confirm('Arm live trading? Any signal that clears all seven gates will fire a REAL order automatically.')) return;
+  try {
+    await api('/api/activate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({armed: next})});
+    toast(next ? 'Armed — live trading enabled' : 'Disarmed — screening only');
+    refreshStatus();
+  } catch (e) { toast('activate: ' + e.message, true); }
+}
+
+async function runScan() {
+  var btn = document.getElementById('scanBtn');
+  btn.disabled = true; btn.textContent = 'Scanning…';
+  try {
+    var data = await api('/api/scan');
+    renderScan(data.rows);
+    toast('Scan complete — ' + data.rows.length + ' coins checked');
+  } catch (e) { toast('scan: ' + e.message, true); }
+  btn.disabled = false; btn.textContent = 'Scan now';
+}
+
+function renderScan(rows) {
+  var body = document.getElementById('scanBody');
+  body.innerHTML = '';
+  rows.forEach(function(r) {
+    var tr = document.createElement('tr');
+    var verdictHtml = '';
+    var fireHtml = '';
+    var selectHtml = '';
+    var fireable = (r.status === 'approved' && r.sizable);
+    if (r.status === 'error') {
+      verdictHtml = '<span class="pill error">error</span> <span class="mut">' + (r.error || '') + '</span>';
+    } else if (r.status === 'no_setup') {
+      var why = (r.reason || 'no setup').replace(/^No setup:\s*/i, '');
+      verdictHtml = '<span class="mut">no setup</span><div class="checks">' + why + '</div>';
+    } else if (r.status === 'approved') {
+      var notSizableNote = r.venue === 'mt5' ? 'not fireable from this scan (MT5)' : 'not sizable';
+      var finalPctNote = r.final_pct !== undefined
+        ? ' · final ' + Math.round(r.final_pct) + '% (smart money ' + r.smart_money_direction + ', ' + r.smart_money_agreement + '/9)'
+        : '';
+      verdictHtml = '<span class="pill approved">approved</span>' +
+        '<div class="checks">entry ' + fmtNum(r.entry) + ' · SL ' + fmtNum(r.stop_loss) + ' · TP ' + fmtNum(r.take_profit) +
+        (r.sizable ? ' · $' + r.usd : ' · ' + notSizableNote) + finalPctNote + '</div>';
+      fireHtml = '<button class="fire-btn" onclick="fire(\'' + r.coin + '\')" ' + (r.sizable ? '' : 'disabled') + '>Fire</button>';
+    } else {
+      var finalPctTag = r.final_pct !== undefined ? ' <span class="mut">(final ' + Math.round(r.final_pct) + '%)</span>' : '';
+      verdictHtml = '<span class="pill rejected">rejected</span> <span class="mut">' + (r.failed_gate || '') + '</span>' + finalPctTag;
+    }
+    // Only approved + sizable rows are selectable — you can't fire what the
+    // screen rejected, what can't be sized, or an MT5 row (this scan's Fire
+    // flow only ever talks to Hyperliquid).
+    if (fireable) {
+      selectHtml = '<input type="checkbox" class="trade-select" data-coin="' + r.coin + '" onchange="updateFireSelected()">';
+    }
+    var venueTag = '<span class="venue-tag ' + (r.venue === 'mt5' ? 'mt5' : 'hl') + '">' + (r.venue === 'mt5' ? 'MT5' : 'HL') + '</span> ';
+    tr.innerHTML =
+      '<td>' + selectHtml + '</td>' +
+      '<td>' + venueTag + '<b>' + r.coin + '</b></td>' +
+      '<td>' + (r.side ? r.side.toUpperCase() : '—') + '</td>' +
+      '<td>' + (r.confidence !== undefined ? Math.round(r.confidence * 100) + '%' : '—') + '</td>' +
+      '<td>' + verdictHtml + '</td>' +
+      '<td>' + fireHtml + '</td>';
+    body.appendChild(tr);
+  });
+  if (!rows.length) body.innerHTML = '<tr><td colspan="6" class="empty">No coins in watchlist.</td></tr>';
+  updateFireSelected();
+}
+
+function selectedCoins() {
+  return Array.from(document.querySelectorAll('.trade-select:checked')).map(function(c){ return c.getAttribute('data-coin'); });
+}
+
+function updateFireSelected() {
+  var n = selectedCoins().length;
+  var btn = document.getElementById('fireSelectedBtn');
+  btn.textContent = 'Fire selected (' + n + ')';
+  btn.disabled = n === 0;
+  var all = document.querySelectorAll('.trade-select');
+  var sa = document.getElementById('selectAll');
+  if (sa) sa.checked = all.length > 0 && n === all.length;
+}
+
+function toggleSelectAll() {
+  var on = document.getElementById('selectAll').checked;
+  document.querySelectorAll('.trade-select').forEach(function(c){ c.checked = on; });
+  updateFireSelected();
+}
+
+async function fire(coin) {
+  if (!confirm('Fire a REAL order for ' + coin + ' now? This re-checks the seven-gate screen and armed state before sending.')) return;
+  try {
+    var data = await api('/api/fire', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({coin: coin})});
+    toast(coin + ' order sent: ' + JSON.stringify(data.result).slice(0, 120));
+    refreshPositions(); refreshStatus();
+  } catch (e) { toast('fire ' + coin + ': ' + e.message, true); }
+}
+
+async function fireSelected() {
+  var coins = selectedCoins();
+  if (!coins.length) return;
+  if (!confirm('Fire ' + coins.length + ' REAL order(s) — ' + coins.join(', ') + '?\n\nEach is re-validated (seven gates + armed + authorization floor + capital guard) server-side before it sends.')) return;
+  var btn = document.getElementById('fireSelectedBtn');
+  btn.disabled = true;
+  var ok = 0, failed = [];
+  // Sequential, not parallel — each fire reads live free margin/positions, and
+  // firing them at once would race that shared account state.
+  for (var i = 0; i < coins.length; i++) {
+    try {
+      await api('/api/fire', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({coin: coins[i]})});
+      ok++;
+    } catch (e) {
+      failed.push(coins[i] + ' (' + e.message + ')');
+    }
+  }
+  toast('Fired ' + ok + '/' + coins.length + (failed.length ? ' — failed: ' + failed.join('; ') : ''), failed.length > 0);
+  refreshPositions(); refreshStatus();
+  runScan();  // refresh the scan so filled/now-unsizable rows update
+}
+
+async function refreshPositions() {
+  try {
+    var data = await api('/api/positions');
+    var body = document.getElementById('posBody');
+    body.innerHTML = '';
+    if (!data.positions.length) {
+      body.innerHTML = '<tr><td colspan="7" class="empty">No open positions.</td></tr>';
+      return;
+    }
+    data.positions.forEach(function(p) {
+      var sl = p.brackets.find(function(b){ return b.orderType === 'Stop Market'; });
+      var tp = p.brackets.find(function(b){ return b.orderType === 'Take Profit Market'; });
+      var bracketTxt = p.brackets.length ?
+        ((sl ? fmtNum(sl.triggerPx) : '?') + ' / ' + (tp ? fmtNum(tp.triggerPx) : '?')) :
+        '<span class="dn">unprotected</span>';
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><b>' + p.coin + '</b></td>' +
+        '<td>' + p.side.toUpperCase() + '</td>' +
+        '<td>' + fmtNum(p.size) + '</td>' +
+        '<td>' + fmtNum(p.entry) + '</td>' +
+        '<td class="' + (p.unrealized_pnl >= 0 ? 'up' : 'dn') + '">' + fmtUsd(p.unrealized_pnl) + '</td>' +
+        '<td>' + p.leverage + 'x</td>' +
+        '<td>' + bracketTxt + '</td>';
+      body.appendChild(tr);
+    });
+  } catch (e) { toast('positions: ' + e.message, true); }
+}
+
+// ---- auto-fire threshold + pending approval queue -------------------------
+
+function renderAutoFire(pct) {
+  var label = document.getElementById('autoFireValue');
+  label.textContent = (pct >= 100) ? 'Review all' : Math.round(pct) + '%';
+  document.querySelectorAll('.af-btn').forEach(function(b) {
+    var v = parseFloat(b.getAttribute('data-af'));
+    var active = Math.abs(v - (pct || 0)) < 1e-6;
+    b.style.background = active ? 'var(--acc)' : 'var(--card)';
+    b.style.color = active ? '#fff' : 'var(--tx)';
+    b.style.borderColor = active ? 'var(--acc)' : 'var(--line)';
+  });
+}
+
+async function setAutoFire(value) {
+  try {
+    await api('/api/autofire', {method:'POST', headers:{'Content-Type':'application/json'},
+                                body: JSON.stringify({auto_fire_pct: value})});
+    toast(value >= 100 ? 'Auto-fire off — every setup queues for approval'
+                       : ('Auto-fire threshold set to ' + Math.round(value) + '%'));
+    refreshStatus();
+    refreshPending();
+  } catch (e) { toast('auto-fire: ' + e.message, true); }
+}
+
+function fmtTtl(secs) {
+  if (secs <= 0) return 'expired';
+  var m = Math.floor(secs / 60), s = Math.floor(secs % 60);
+  return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+}
+
+async function refreshPending() {
+  try {
+    var d = await api('/api/pending');
+    var rows = d.pending || [];
+    var body = document.getElementById('pendingBody');
+    var empty = document.getElementById('pendingEmpty');
+    document.getElementById('pendingCount').textContent =
+      rows.length ? (rows.length + ' awaiting') : 'none';
+    body.innerHTML = '';
+    empty.style.display = rows.length ? 'none' : '';
+
+    rows.forEach(function(r) {
+      var ttl = (r.expires_at || 0) - (d.now || 0);
+      var soon = ttl < 120;
+      var card = document.createElement('div');
+      card.className = 'pend-card' + (soon ? ' expiring' : '');
+      var venueCls = r.venue === 'mt5' ? 'mt5' : 'hl';
+      var sideCls = r.side === 'long' ? 'up' : 'dn';
+      // MT5 entries can be cancelled here but not fired — this panel only
+      // has a Hyperliquid client (see /api/pending/approve).
+      var canApprove = r.venue === 'hl';
+      card.innerHTML =
+        '<div class="pend-top">' +
+          '<span class="venue-tag ' + venueCls + '">' + (r.venue === 'mt5' ? 'MT5' : 'HL') + '</span>' +
+          '<span class="pend-sym">' + r.symbol + '</span>' +
+          '<span class="' + sideCls + '" style="font-weight:700;font-size:12px;">' + r.side.toUpperCase() + '</span>' +
+          '<span class="pend-score">' + Math.round(r.final_pct) + '%</span>' +
+        '</div>' +
+        '<div class="pend-meta">' +
+          'entry ' + fmtNum(r.entry_price) + ' · SL ' + fmtNum(r.stop_loss) + ' · TP ' + fmtNum(r.take_profit) + '<br>' +
+          'conf ' + Math.round((r.confidence || 0) * 100) + '% · smart money ' +
+          (r.smart_money_direction || 'NEUTRAL') + ' (' + (r.smart_money_agreement || 0) + '/9)<br>' +
+          'expires in <span class="ttl' + (soon ? ' soon' : '') + '">' + fmtTtl(ttl) + '</span>' +
+        '</div>' +
+        '<div class="pend-actions">' +
+          (canApprove
+            ? '<button onclick="approvePending(\'' + r.id + '\',\'' + r.symbol + '\')">Approve</button>'
+            : '<button disabled title="MT5 orders must be actioned from the MT5 terminal">Approve (MT5 n/a)</button>') +
+          '<button class="danger" onclick="cancelPending(\'' + r.id + '\',\'' + r.symbol + '\')">Cancel</button>' +
+        '</div>';
+      body.appendChild(card);
+    });
+  } catch (e) { toast('pending: ' + e.message, true); }
+}
+
+async function approvePending(id, symbol) {
+  if (!confirm('Approve and FIRE a real order for ' + symbol + '?\n\nIt is re-screened against live prices first — if it has gone stale it will be dropped, not fired.')) return;
+  try {
+    var r = await api('/api/pending/approve', {method:'POST', headers:{'Content-Type':'application/json'},
+                                               body: JSON.stringify({id: id})});
+    toast('FIRED ' + symbol + ' ' + r.plan.side.toUpperCase() + ' $' + r.plan.usd);
+  } catch (e) { toast(symbol + ': ' + e.message, true); }
+  refreshPending();
+  refreshPositions();
+}
+
+async function cancelPending(id, symbol) {
+  try {
+    await api('/api/pending/cancel', {method:'POST', headers:{'Content-Type':'application/json'},
+                                      body: JSON.stringify({id: id})});
+    toast('Cancelled ' + symbol);
+  } catch (e) { toast(symbol + ': ' + e.message, true); }
+  refreshPending();
+}
+
+function fmtCompactUsd(v) {
+  if (v === null || v === undefined) return '—';
+  var abs = Math.abs(v);
+  var suffix = abs >= 1e12 ? ['T', 1e12] : abs >= 1e9 ? ['B', 1e9] : abs >= 1e6 ? ['M', 1e6] : abs >= 1e3 ? ['K', 1e3] : ['', 1];
+  return (v < 0 ? '-$' : '$') + (abs / suffix[1]).toFixed(2) + suffix[0];
+}
+
+async function refreshTopMarketCap() {
+  try {
+    var d = await api('/api/top-market-cap');
+    var body = document.getElementById('topMcapBody');
+    body.innerHTML = '';
+    (d.rows || []).forEach(function(r) {
+      var tr = document.createElement('tr');
+      var chg = r.change_24h_pct;
+      var chgCls = chg > 0 ? 'up' : chg < 0 ? 'dn' : 'mut';
+      tr.innerHTML =
+        '<td class="mut">' + (r.rank ?? '—') + '</td>' +
+        '<td><b>' + r.symbol + '</b> <span class="mut">' + r.name + '</span></td>' +
+        '<td>' + fmtUsd(r.price) + '</td>' +
+        '<td class="' + chgCls + '">' + (chg === null || chg === undefined ? '—' : (chg > 0 ? '+' : '') + chg.toFixed(2) + '%') + '</td>' +
+        '<td>' + fmtCompactUsd(r.market_cap) + '</td>' +
+        '<td>' + fmtCompactUsd(r.volume_24h) + '</td>';
+      body.appendChild(tr);
+    });
+    if (!(d.rows || []).length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">No data.</td></tr>';
+    }
+  } catch (e) { toast('top market cap: ' + e.message, true); }
+}
+
+async function refreshWatchlist() {
+  try {
+    var d = await api('/api/watchlist');
+    var body = document.getElementById('watchlistBody');
+    body.innerHTML = '';
+    (d.rows || []).forEach(function(r) {
+      var tr = document.createElement('tr');
+      if (!r.available) {
+        tr.innerHTML = '<td><b>' + r.coin + '</b></td><td colspan="5" class="mut">not listed on Binance</td>';
+        body.appendChild(tr);
+        return;
+      }
+      var chg = r.change_24h_pct;
+      var chgCls = chg > 0 ? 'up' : chg < 0 ? 'dn' : 'mut';
+      tr.innerHTML =
+        '<td><b>' + r.coin + '</b></td>' +
+        '<td>' + fmtUsd(r.price) + '</td>' +
+        '<td class="' + chgCls + '">' + (chg === null || chg === undefined ? '—' : (chg > 0 ? '+' : '') + chg.toFixed(2) + '%') + '</td>' +
+        '<td>' + fmtUsd(r.high_24h) + '</td>' +
+        '<td>' + fmtUsd(r.low_24h) + '</td>' +
+        '<td>' + fmtCompactUsd(r.volume_24h) + '</td>';
+      tr.style.cursor = 'pointer';
+      tr.title = 'Click for ' + r.coin + '\'s live chart';
+      tr.onclick = function() { openCoinDetail(r.coin, 'crypto'); };
+      body.appendChild(tr);
+    });
+    if (!(d.rows || []).length) {
+      body.innerHTML = '<tr><td colspan="6" class="empty">No data.</td></tr>';
+    }
+  } catch (e) { toast('watchlist: ' + e.message, true); }
+}
+
+function buildSparklineSvg(candles) {
+  if (!candles || candles.length < 2) return '';
+  var closes = candles.map(function(c) { return c.close; });
+  var min = Math.min.apply(null, closes), max = Math.max.apply(null, closes);
+  var range = (max - min) || 1;
+  var w = 100, h = 100; // viewBox units, scales via CSS width
+  var pts = closes.map(function(c, i) {
+    var x = (i / (closes.length - 1)) * w;
+    var y = h - ((c - min) / range) * h;
+    return x.toFixed(2) + ',' + y.toFixed(2);
+  }).join(' ');
+  var up = closes[closes.length - 1] >= closes[0];
+  var color = up ? 'var(--up)' : 'var(--dn)';
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none" ' +
+    'style="width:100%;height:160px;display:block;">' +
+    '<polyline points="' + pts + '" fill="none" stroke="' + color + '" stroke-width="1.5" ' +
+    'vector-effect="non-scaling-stroke"/></svg>';
+}
+
+async function openCoinDetail(symbol, venue) {
+  var section = document.getElementById('coinDetailSection');
+  section.style.display = '';
+  document.getElementById('coinDetailTitle').textContent = symbol + ' — loading…';
+  section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  try {
+    var d = await api('/api/coin-chart?symbol=' + encodeURIComponent(symbol) + '&venue=' + venue);
+    document.getElementById('coinDetailTitle').textContent = symbol + ' (' + (venue === 'mt5' ? 'MT5' : 'Binance') + ')';
+    document.getElementById('coinDetailPrice').textContent = fmtUsd(d.last);
+    var chg = d.change_pct;
+    var chgEl = document.getElementById('coinDetailChange');
+    chgEl.textContent = (chg === null || chg === undefined ? '—' : (chg > 0 ? '+' : '') + chg.toFixed(2) + '%');
+    chgEl.className = 'v ' + (chg > 0 ? 'up' : chg < 0 ? 'dn' : 'mut');
+    document.getElementById('coinDetailHigh').textContent = fmtUsd(d.high);
+    document.getElementById('coinDetailLow').textContent = fmtUsd(d.low);
+    var chartEl = document.getElementById('coinDetailChart');
+    var emptyEl = document.getElementById('coinDetailEmpty');
+    var svg = buildSparklineSvg(d.candles);
+    if (svg) {
+      chartEl.innerHTML = svg;
+      chartEl.style.display = '';
+      emptyEl.style.display = 'none';
+    } else {
+      chartEl.style.display = 'none';
+      emptyEl.style.display = '';
+    }
+  } catch (e) {
+    document.getElementById('coinDetailTitle').textContent = symbol + ' — failed to load';
+    toast('chart: ' + e.message, true);
+  }
+}
+
+function closeCoinDetail() {
+  document.getElementById('coinDetailSection').style.display = 'none';
+}
+
+document.querySelectorAll('.thr-btn').forEach(function(b) {
+  b.addEventListener('click', function() { setThreshold(parseFloat(b.getAttribute('data-thr'))); });
+});
+document.querySelectorAll('.af-btn').forEach(function(b) {
+  b.addEventListener('click', function() { setAutoFire(parseFloat(b.getAttribute('data-af'))); });
+});
+
+refreshStatus();
+refreshPositions();
+refreshRegime();
+refreshPending();
+refreshTopMarketCap();
+refreshWatchlist();
+setInterval(refreshStatus, 15000);
+setInterval(refreshPositions, 15000);
+setInterval(refreshRegime, 60000);  // server caches the underlying fetch for 15m regardless
+setInterval(refreshPending, 10000); // faster: these expire, and the countdown should look live
+setInterval(refreshTopMarketCap, 60000); // matches TOP_MCAP_CACHE_SECONDS server-side
+setInterval(refreshWatchlist, 30000); // matches WATCHLIST_CACHE_SECONDS server-side
 </script>
 </body>
 </html>

@@ -1,0 +1,354 @@
+"""Multi-concept decision layer: many opinions, one verdict, and a reason.
+
+The seven-gate screen in bot/screening.py is an AND. Every gate must pass, so a
+single failing check kills the trade and the reason it failed is the only thing
+you learn. That is safe but blunt: it cannot tell the difference between "one
+minor condition missed while everything else strongly agrees" and "nothing
+agrees at all", and it discards the first case entirely.
+
+This module answers a different question. Every concept the corpus identified as
+load-bearing gets a VOTE -- agree, disagree, or abstain -- and the result carries
+a diagnosis explaining what dissented and whether the remaining evidence still
+supports the trade. When a concept fails, you get why it failed, not just that
+it did.
+
+    screening.py   "is every condition met?"          -> trade / no trade
+    consensus.py   "what does each concept think,     -> score + diagnosis
+                    and if one dissents, do the
+                    others still carry it?"
+
+ABSTAIN IS NOT DISAGREE, and keeping them separate is the whole design. A
+volume profile cannot form an opinion on a feed with no volume column; a Wyckoff
+reading is meaningless when price is trending rather than ranging. Scoring those
+as disagreement would penalise a trade for conditions that were never measurable,
+and a system that cannot say "I don't know" will always find a reason to say no.
+
+WEIGHTS ARE DERIVED FROM THE CORPUS, not chosen. Each is channel breadth times
+document share across 448 documents from 6 independent educators, normalised to
+1.0. They are recomputed whenever the corpus grows, and they have already moved
+once: the original four channels turned out to be more homogeneous than they
+looked, so a concept scoring 4-of-4 there was partly measuring channel selection.
+Every weight except structure fell when two differently-chosen channels were
+added.
+
+NOTHING HERE PLACES A TRADE. It scores and explains; bot/screening.py remains
+the gate.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import pandas as pd
+
+AGREE = "agree"
+DISAGREE = "disagree"
+ABSTAIN = "abstain"
+
+# Derived from the corpus, recomputed each time it grows. Regenerate with
+#   python scripts/derive_weights.py --diff
+WEIGHTS: dict = {
+    # DERIVED, not chosen. weight = (channels discussing it / 10) x (share of
+    # the 639 documents that mention it), normalised so the top concept is 1.0.
+    # Third derivation: 4 channels -> 6 -> 10, now 639 documents / 2,837,374
+    # words, after adding ICT (the origin of most of this vocabulary), Fractal
+    # Flow and JeaFx.
+    #
+    # History worth keeping, because the direction of travel is the finding:
+    #
+    #   concept      4ch    6ch    10ch
+    #   structure    1.00   1.00   1.00
+    #   mitigation   1.00   0.58   0.40
+    #   candle       --     0.53   0.64
+    #   wyckoff      0.30   0.12   0.13
+    #
+    # mitigation has now fallen twice, from joint-highest to 0.40. Each time
+    # the sample widened it got smaller, which is what a channel-selection
+    # artifact looks like -- not what a real consensus looks like. It is no
+    # longer close to universal and should not be gated on as if it were.
+    #
+    # candle is the one that ROSE (0.53 -> 0.64, 9 channels, 56% of documents),
+    # and it is the uncomfortable one: docs/KNOWLEDGE.md records that every
+    # candlestick concept maps to NOTHING in this codebase. The wider corpus
+    # makes that gap larger, not smaller. Widening the sample cannot close it;
+    # only writing the detectors can.
+    #
+    # wyckoff ticked up 0.12 -> 0.13 on 7 channels. Still the lowest weight,
+    # and still correctly so -- but it is no longer the single-source artifact
+    # it was at 4 channels (61 of 62 videos from one source).
+    #
+    # The ratio is what matters, not the scale: the score divides by
+    # participating weight, so this is a weighted average.
+    "structure": 1.00,        # 9 ch, 558 docs, 87%
+    "take_profit": 0.77,      # 9 ch, 430 docs, 67%
+    "liquidity_sweep": 0.74,  # 9 ch, 414 docs, 65%
+    "candle": 0.64,           # 9 ch, 357 docs, 56%   (was 0.53)
+    "premium_discount": 0.46, # 9 ch, 255 docs, 40%
+    "mitigation": 0.40,       # 8 ch, 251 docs, 39%   (was 1.0, then 0.58)
+    "supply_demand": 0.32,    # 8 ch, 200 docs, 31%
+    "fibonacci": 0.31,        # 9 ch, 172 docs, 27%
+    "volume_profile": 0.30,   # 7 ch, 213 docs, 33%   (incl. VWAP)
+    "breaker": 0.15,          # 6 ch, 127 docs, 20%
+    "wyckoff": 0.13,          # 7 ch,  91 docs, 14%
+}
+
+
+@dataclass
+class ConceptVote:
+    concept: str
+    verdict: str            # agree | disagree | abstain
+    detail: str
+    weight: float = 1.0
+
+    @property
+    def signed(self) -> float:
+        if self.verdict == AGREE:
+            return self.weight
+        if self.verdict == DISAGREE:
+            return -self.weight
+        return 0.0
+
+
+@dataclass
+class ConsensusResult:
+    direction: str
+    votes: list[ConceptVote] = field(default_factory=list)
+    score: float = 0.0          # -1.0 .. +1.0 over the concepts that voted
+    agreed: int = 0
+    dissented: int = 0
+    abstained: int = 0
+
+    @property
+    def participating_weight(self) -> float:
+        return sum(v.weight for v in self.votes if v.verdict != ABSTAIN)
+
+    @property
+    def verdict(self) -> str:
+        if self.participating_weight <= 0:
+            return "no_opinion"
+        if self.score >= 0.6:
+            return "strong"
+        if self.score >= 0.25:
+            return "supported"
+        if self.score > -0.25:
+            return "mixed"
+        return "contradicted"
+
+    def diagnose(self) -> str:
+        """Why the dissenters dissented, and whether the rest still carry it.
+
+        This is the "reanalyse when a concept fails" step. A bare score hides
+        the two cases that matter most: a strong setup with one nitpick, and a
+        weak setup that only looks acceptable because most concepts abstained.
+        """
+        lines = [f"  direction {self.direction}  verdict {self.verdict.upper()}  "
+                 f"score {self.score:+.2f}  "
+                 f"({self.agreed} agree / {self.dissented} dissent / "
+                 f"{self.abstained} abstain)"]
+
+        dissent = [v for v in self.votes if v.verdict == DISAGREE]
+        agree = [v for v in self.votes if v.verdict == AGREE]
+        abstain = [v for v in self.votes if v.verdict == ABSTAIN]
+
+        if dissent:
+            lines.append("  DISSENT — what failed and why:")
+            for v in sorted(dissent, key=lambda x: -x.weight):
+                lines.append(f"    - {v.concept:16s} (w{v.weight:.1f})  {v.detail}")
+        if agree:
+            lines.append("  SUPPORT — what still backs the trade:")
+            for v in sorted(agree, key=lambda x: -x.weight):
+                lines.append(f"    + {v.concept:16s} (w{v.weight:.1f})  {v.detail}")
+        if abstain:
+            lines.append("  NO READING — these could not form an opinion:")
+            for v in abstain:
+                lines.append(f"    ? {v.concept:16s}  {v.detail}")
+
+        # The honest interpretation, spelled out rather than left to the reader.
+        if self.verdict == "no_opinion":
+            lines.append("  => Nothing could read this setup. Absence of dissent is "
+                         "NOT support.")
+        elif self.abstained > self.agreed + self.dissented:
+            lines.append("  => Most concepts abstained. The score rests on a "
+                         "minority and is weaker than it looks.")
+        elif self.verdict == "contradicted":
+            lines.append("  => The weight of evidence is AGAINST this trade, not "
+                         "merely absent.")
+        elif dissent and self.verdict in ("strong", "supported"):
+            top = max(dissent, key=lambda v: v.weight)
+            lines.append(f"  => Carried despite {top.concept} dissenting. The "
+                         f"remaining concepts outweigh it; that is a judgement, "
+                         f"not a certainty.")
+        return "\n".join(lines)
+
+
+def _vote(concept: str, ok: bool | None, yes: str, no: str,
+          abstain_reason: str = "no reading available") -> ConceptVote:
+    w = WEIGHTS.get(concept, 0.5)
+    if ok is None:
+        return ConceptVote(concept, ABSTAIN, abstain_reason, w)
+    return ConceptVote(concept, AGREE if ok else DISAGREE, yes if ok else no, w)
+
+
+def evaluate(df: pd.DataFrame, htf_df: pd.DataFrame | None,
+             direction: str, price: float) -> ConsensusResult:
+    """Poll every concept about `direction` at `price`. Never raises.
+
+    A detector that throws must not take the decision layer down with it -- one
+    broken concept becoming a system-wide outage is exactly the failure this
+    module exists to survive. Exceptions become abstentions, and the diagnosis
+    says so.
+    """
+    votes: list[ConceptVote] = []
+    want_bull = direction == "long"
+
+    def guarded(concept: str, fn):
+        try:
+            votes.append(fn())
+        except Exception as exc:
+            votes.append(ConceptVote(concept, ABSTAIN,
+                                     f"detector error: {type(exc).__name__}",
+                                     WEIGHTS.get(concept, 0.5)))
+
+    def _structure():
+        from .structure import Trend, detect_trend, find_swing_points
+        t = detect_trend(find_swing_points(df))
+        if t == Trend.NEUTRAL:
+            return _vote("structure", None, "", "", "trend is neutral")
+        ok = (t == Trend.BULLISH) if want_bull else (t == Trend.BEARISH)
+        return _vote("structure", ok, f"trend {t.value} agrees",
+                     f"trend {t.value} opposes")
+
+    def _mitigation():
+        from .mitigation import active_mitigation
+        m = active_mitigation(df, price, direction)
+        return _vote("mitigation", m is not None,
+                     f"in respected zone {m.bottom:.4g}-{m.top:.4g}" if m else "",
+                     "entry is not in a respected mitigation zone")
+
+    def _breaker():
+        from .breaker import active_breaker
+        b = active_breaker(df, price, direction)
+        return _vote("breaker", b is not None,
+                     f"retested zone (was {b.origin_direction}, now {b.direction})" if b else "",
+                     "no retested breaker at this price")
+
+    def _candle():
+        from .candles import confirms
+        p = confirms(df, direction)
+        return _vote("candle", p is not None,
+                     f"{p.name} {p.direction} (strength {p.strength:.2f})" if p else "",
+                     "no confirming candle on the recent bars")
+
+    def _wyckoff():
+        from .wyckoff import analyse
+        st = analyse(df)
+        if st.trading_range is None:
+            return _vote("wyckoff", None, "", "", "no trading range (trending)")
+        if st.direction == "neutral":
+            return _vote("wyckoff", None, "", "",
+                         "range rejected both sides; genuinely no signal")
+        ok = (st.direction == "bullish") if want_bull else (st.direction == "bearish")
+        return _vote("wyckoff", ok, f"{st.bias} bias agrees",
+                     f"{st.bias} bias opposes")
+
+    def _volume_profile():
+        from .volume_profile import at_value_area_edge, build_profile
+        if "volume" not in df.columns:
+            return _vote("volume_profile", None, "", "", "feed has no volume column")
+        if build_profile(df) is None:
+            return _vote("volume_profile", None, "", "", "profile could not be built")
+        edge = at_value_area_edge(df, price)
+        want = "low" if want_bull else "high"
+        if edge is None:
+            return _vote("volume_profile", False, "",
+                         "entry is mid-value-area (fair value, no edge)")
+        return _vote("volume_profile", edge == want,
+                     f"at value-area {edge}", f"at value-area {edge}, wrong side")
+
+    def _supply_demand():
+        from .structure import find_swing_points
+        from .supply_demand import detect_supply_demand_zones, nearest_zone
+        zones = detect_supply_demand_zones(df, find_swing_points(df))
+        want = "demand" if want_bull else "supply"
+        z = nearest_zone(price, zones, want)
+        return _vote("supply_demand", z is not None,
+                     f"at a {want} zone" if z else "",
+                     f"not at a {want} zone")
+
+    def _premium_discount():
+        from .structure import (find_swing_points, is_in_discount,
+                                is_in_premium, premium_discount_zone)
+        swings = find_swing_points(df)
+        zone = premium_discount_zone(df, swings)
+        if zone is None:
+            return _vote("premium_discount", None, "", "", "no clean range")
+        ok = is_in_discount(price, zone) if want_bull else is_in_premium(price, zone)
+        side = "discount" if want_bull else "premium"
+        return _vote("premium_discount", ok, f"price is in {side}",
+                     f"price is NOT in {side}")
+
+    def _liquidity_sweep():
+        from .liquidity import detect_liquidity_pools, recent_sweep
+        pools = detect_liquidity_pools(df)
+        s = recent_sweep(pools, df)
+        want = "sell_side" if want_bull else "buy_side"
+        if s is None:
+            return _vote("liquidity_sweep", False, "", "no recent sweep")
+        return _vote("liquidity_sweep", s.kind == want,
+                     f"{s.kind} swept", f"{s.kind} swept (wanted {want})")
+
+    def _fibonacci():
+        from .fibonacci import in_ote, recent_leg
+        from .structure import find_swing_points
+        leg = recent_leg(find_swing_points(df), direction)
+        if leg is None:
+            return _vote("fibonacci", None, "", "", "no clean leg to measure")
+        ok = in_ote(price, leg[0], leg[1])
+        return _vote("fibonacci", ok, "entry in the OTE pocket",
+                     "entry outside the OTE pocket")
+
+    for name, fn in (("structure", _structure), ("mitigation", _mitigation),
+                     ("breaker", _breaker), ("candle", _candle),
+                     ("wyckoff", _wyckoff), ("volume_profile", _volume_profile),
+                     ("supply_demand", _supply_demand),
+                     ("premium_discount", _premium_discount),
+                     ("liquidity_sweep", _liquidity_sweep),
+                     ("fibonacci", _fibonacci)):
+        guarded(name, fn)
+
+    total_w = sum(v.weight for v in votes if v.verdict != ABSTAIN)
+    score = (sum(v.signed for v in votes) / total_w) if total_w > 0 else 0.0
+    return ConsensusResult(
+        direction=direction, votes=votes, score=score,
+        agreed=sum(1 for v in votes if v.verdict == AGREE),
+        dissented=sum(1 for v in votes if v.verdict == DISAGREE),
+        abstained=sum(1 for v in votes if v.verdict == ABSTAIN),
+    )
+
+
+# bot/screening.py check name -> concept weight above. Without this the
+# consensus MODE counted soft checks unweighted, so the Fibonacci gate
+# (evidence weight 0.29) carried exactly as much as structure (1.00) -- the
+# derived weights existed but the decision that uses them ignored them.
+CHECK_WEIGHTS: dict = {
+    "Top-down alignment": WEIGHTS["structure"],
+    "Liquidity sweep": WEIGHTS["liquidity_sweep"],
+    "Supply/Demand": WEIGHTS["supply_demand"],
+    "Fibonacci OTE (final)": WEIGHTS["fibonacci"],
+    "Mitigation": WEIGHTS["mitigation"],
+    "Breaker": WEIGHTS["breaker"],
+    "Candle confirmation": WEIGHTS["candle"],
+    "Wyckoff": WEIGHTS["wyckoff"],
+    "Value area edge": WEIGHTS["volume_profile"],
+    "VWAP side": WEIGHTS["volume_profile"],
+    "Premium/Discount": WEIGHTS["premium_discount"],
+    "Target at a level": WEIGHTS["take_profit"],
+    # Not a corpus concept -- a confidence-plus-stop-distance check. Given the
+    # median weight rather than 1.0 so it neither dominates nor is ignored.
+    "Sniper entry": 0.5,
+}
+
+
+def check_weight(name: str) -> float:
+    """Evidence weight for a screen check. Unknown checks get the median."""
+    return CHECK_WEIGHTS.get(name, 0.5)

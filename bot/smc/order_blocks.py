@@ -21,7 +21,20 @@ def detect_order_blocks(
     Detect order blocks: last opposing candle before a strong impulsive move.
     Bullish OB = last bearish candle before bullish impulse.
     Bearish OB = last bullish candle before bearish impulse.
+
+    Returns only zones that are still ACTIVE -- touched and not broken. If you
+    need the broken ones, use raw_order_blocks(): a block price closed through
+    is precisely what bot/smc/breaker.py is looking for, so filtering here
+    would leave that detector permanently empty.
     """
+    return _mark_mitigated(
+        df, raw_order_blocks(df, lookback, impulse_threshold))
+
+
+def raw_order_blocks(
+    df: pd.DataFrame, lookback: int = 20, impulse_threshold: float = 0.005
+) -> list[OrderBlock]:
+    """Every candidate zone, including ones price later broke."""
     blocks: list[OrderBlock] = []
     opens = df["open"].values
     closes = df["close"].values
@@ -52,9 +65,7 @@ def detect_order_blocks(
                 )
             )
 
-    # Keep only recent, unmitigated blocks
-    recent = blocks[-lookback:]
-    return _mark_mitigated(df, recent)
+    return blocks[-lookback:]
 
 
 def _mark_mitigated(df: pd.DataFrame, blocks: list[OrderBlock]) -> list[OrderBlock]:

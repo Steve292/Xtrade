@@ -1,0 +1,21 @@
+# Isolated env for the read-only signals MCP server — Python 3.13+ required
+# (the official `mcp` SDK needs >=3.10; the main project venv is pinned to
+# 3.9 for the live trading bot's own dependencies, so this is intentionally
+# separate and never touches that runtime).
+#
+# Setup:
+#   /usr/local/bin/python3.13 -m venv mcp_server/venv
+#   mcp_server/venv/bin/pip install -r mcp_server/requirements.txt
+
+mcp[cli]>=1.28.0
+requests>=2.31.0
+pyyaml>=6.0.1
+pandas>=2.2.0
+python-dotenv>=1.0.0
+
+# Hyperliquid read-only client (BTC candles/price for CVD, GEX, heatmap, SMC+Fib)
+hyperliquid-python-sdk>=0.24.0
+
+# MT5 read-only client (forex/gold watchlist candles) — bridge backend only;
+# needs a Windows/Wine box running mt5linux's server, same as the main venv.
+mt5linux>=0.1.9

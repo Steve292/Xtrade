@@ -3,7 +3,7 @@ timeframe: 15m
 higher_timeframe: 1h
 
 # Venue: cex (Binance via CCXT) | evm (on-chain DEX) | mt5 (MetaTrader 5 bridge)
-venue: cex
+venue: mt5
 
 # SMC parameters
 swing_lookback: 5
@@ -12,9 +12,63 @@ fvg_min_size_pct: 0.001
 liquidity_tolerance_pct: 0.0005
 
 # Risk management
-risk_per_trade_pct: 1.0
+#
+# 35% PER TRADE, set at explicit user request after being shown the arithmetic
+# below. Recorded here so the decision stays visible rather than becoming an
+# unexplained number:
+#     loss 1 -> 65% of deposit remains
+#     loss 2 -> 42%
+#     loss 3 -> 27%
+#     loss 5 -> 12%
+#     90% of the account is gone after 5.3 consecutive losses
+# The account audit (14 Aug 2026) measured a 28-consecutive-loss streak at a
+# 49.5% win rate. capital_guard.max_daily_loss_pct (3%) and max_drawdown_pct
+# (10%) below are the only things standing between this figure and that streak,
+# and they halt trading long before 5 losses -- which is what makes the setting
+# survivable in practice. Do not disable them while this is set.
+risk_per_trade_pct: 35.0
 reward_risk_ratio: 2.0
 max_open_trades: 1
+
+# Fixed stop-loss distance from entry for every live trade, REPLACING the
+# order-block/FVG-boundary invalidation stop SMCStrategy would otherwise use
+# — set at explicit user request, paired with screening.max_stop_pct below
+# (raised from 2% to 25% so the Sniper-entry gate can still pass a 20% stop).
+# null/omitted keeps the original structural stop (used by backtests,
+# scan.py, and market_snapshot.py's informational second-opinion strategy,
+# none of which read this key).
+# REPLACED by stop_atr_mult below. Kept for reference with the measurement that
+# retired it: at 0.20 on XAUUSDc M15, a short at 4504 placed its stop at 5405
+# and its target at 2702, while gold's ENTIRE range over 5,000 bars (2.5 months)
+# was 3942-4541. The stop sat 864 points above the highest price reached and the
+# target 1,240 below the lowest, so the position could never close -- and with
+# max_open_trades: 1 the bot then never traded again. Backtest over that window:
+# ZERO closed trades. stop_atr_mult takes precedence when both are set.
+# stop_loss_pct: 0.20
+
+# Stop distance as a multiple of ATR(14) -- sized from what the instrument
+# actually moves rather than a fixed percentage of price. Measured on 5,000
+# bars of real XAUUSDc M15:
+#     fixed 20%    0 trades   (unreachable, see above)
+#     structural   129 trades  PF 0.827   ret -4.95%
+#     ATR x3.0      57 trades  PF 0.930   ret -1.94%
+#     ATR x2.0     100 trades  PF 1.074   ret +2.36%   <-- only profitable one
+# 100 trades clears the 30-trade floor bot/knowledge/verify.py requires before
+# it will call anything a result. PF 1.074 over one instrument and 2.5 months is
+# thin, not a proven edge -- it is simply the best of the four, by measurement.
+stop_atr_mult: 2.0
+
+# Staged fixed-dollar risk per trade, overriding risk_per_trade_pct above
+# when enabled — set at explicit user request: $3/trade while combined
+# capital+profit (both venues, via bot/combined_ledger.py) is below
+# threshold_usd, $6/trade once it reaches or exceeds it. Recomputed fresh
+# every pass against the live combined balance (bot/position_sizing.py's
+# staged_fixed_risk_usd/risk_pct_for_fixed_usd).
+fixed_risk_usd:
+  enabled: true
+  low: 3.0
+  high: 6.0
+  threshold_usd: 100.0
 
 # Paper trading
 initial_balance: 10000.0
@@ -28,28 +82,267 @@ evm_slippage_pct: 0.5
 # Symbol name must match your broker exactly, including any suffix
 # (e.g. EURUSD, XAUUSD, BTCUSD, EURUSD.r). Timeframe reuses the same
 # strings as above (1m/5m/15m/30m/1h/4h/1d).
-mt5_symbol: EURUSD
+# mt5_backend: bridge (default) needs a Windows box running mt5linux, set
+#              MT5_HOST/MT5_PORT/MT5_LOGIN/MT5_PASSWORD/MT5_SERVER in .env.
+#              metaapi needs no box of your own — set METAAPI_TOKEN plus the
+#              same MT5_LOGIN/MT5_PASSWORD/MT5_SERVER in .env.
+mt5_backend: bridge
+mt5_symbol: EURUSDc
 mt5_timeframe: 15m
+# Cent account: the broker reports balance/PnL in cents, not dollars
+# (100 units = $1). Position sizing is unaffected — tick_value is reported
+# in the same cent units, so the risk math is already self-consistent — this
+# flag only fixes the human-facing $ balance/PnL printouts.
+mt5_cent_account: true
+# Symbols to scan every poll cycle (each gets its own position slot; overrides
+# mt5_symbol above when set). Confirmed against this account's actual symbol
+# list — this broker's Cent account naming uses a trailing "c" suffix.
+# US30 (and every other index CFD) is NOT available on Exness Cent accounts —
+# checked directly against the account's symbol universe, not just Market
+# Watch — so it's left out; it needs a Standard/Zero/Pro account type instead.
+mt5_watchlist: [EURUSDc, USDJPYc, GBPUSDc, GBPJPYc, XAUUSDc, BTCUSDc, ETHUSDc]
 
 # Backtest defaults
 backtest_bars: 2000
 
-# Hyperliquid DeFi wallet + perps (long/short on one venue, testnet by default)
+# Hyperliquid DeFi wallet + perps (long/short on one venue)
 hyperliquid:
-  testnet: true
+  testnet: false
   default_leverage: 3
   # Majors — PAXG is tokenized gold; XMR is a listed perp (no Monero-chain custody)
-  majors: [BTC, ETH, SOL, HYPE, XMR, PAXG]
+  majors: [BTC, ETH, SOL, HYPE, WLD, XMR, PAXG]
   # Sample memecoins (k-prefixed = 1000x-denominated on Hyperliquid)
-  memecoins: [kPEPE, WIF, POPCAT, FARTCOIN, TRUMP, DOGE, GOAT, MOODENG, PNUT, kBONK, kSHIB, MELANIA]
+  memecoins: [kPEPE, WIF, POPCAT, FARTCOIN, TRUMP, DOGE, GOAT, MOODENG, PNUT, kBONK, kSHIB, MELANIA, BRETT]
 
 # Trade screening — a signal must clear ALL of these before it is approved to trade
 screening:
-  min_confidence: 0.55     # SMC confluence score floor
+  # DECISION MODE -- the one change in this file backed by a measurement rather
+  # than by consensus among educators.
+  #
+  # "all" (the original) requires every gate to pass. On 5,000 bars of XAUUSDc
+  # with ATR x2.0 stops it approved TWO trades out of ~100 signals. Per-gate
+  # rejection over 65 sampled signals: Fibonacci OTE 86%, Supply/Demand 80%,
+  # Sniper 29%, Liquidity sweep 26%, Top-down 15%. No single gate is at fault --
+  # multiply those pass rates and ~1.2% falls out, which is the 1.5% observed.
+  # A system taking 2 trades in 2.5 months also cannot be VALIDATED: every
+  # backtest returns "inconclusive, too few trades", which happened five times
+  # before the cause was found.
+  #
+  # "consensus" keeps all the same checks but stops treating each as a veto.
+  # Measured on the same data:
+  #     AND of 7 gates      2 trades  PF   -    ret 2.25%
+  #     consensus >=35%    93 trades  PF 1.150  ret 4.41%  maxDD 3.7%
+  #     consensus >=45%    63 trades  PF 1.238  ret 4.30%  maxDD 2.8%   <- chosen
+  #     consensus >=65%    13 trades  PF 1.533  ret 2.05%  maxDD 1.8%
+  #
+  # 65% has the best profit factor and is REJECTED: 13 trades is below the
+  # 30-trade floor bot/knowledge/verify.py requires, and best-PF-on-smallest-
+  # sample is the overfit signature. 45% clears the floor at 63 trades and beats
+  # the UNSCREENED strategy on both axes (PF 1.074 -> 1.238, ret 2.36% -> 4.30%)
+  # at a lower drawdown.
+  #
+  # Thresholds between 0.41 and 0.60 behave identically: there are 5 soft checks,
+  # so the pass share is quantised to fifths and both round to "3 of 5".
+  #
+  # Honest limits: one instrument, 2.5 months, 63 trades, and a 33% win rate
+  # carried by the 2:1 reward:risk. Better than every alternative measured; not
+  # a proven edge across instruments or regimes.
+  mode: consensus
+  consensus_threshold: 0.45
+  min_confidence: 0.55     # SMC confluence score floor (a HARD veto in consensus mode)
   min_rr: 2.0              # minimum reward:risk
   sniper_confidence: 0.65  # confidence required for a "sniper" entry
-  max_stop_pct: 0.02       # tightest invalidation for a sniper entry (2%)
+  max_stop_pct: 0.25       # raised from 2% to fit the fixed stop_loss_pct (0.20) above
   ote_low: 0.618           # Fibonacci golden-pocket bounds (OTE zone)
   ote_high: 0.786
   liquidity_tolerance_pct: 0.0005  # equal-high/low tolerance for liquidity pools
   sweep_bars: 20           # a liquidity sweep must be this recent to confirm
+  # Optional gates 8-15 are now ON, as a SET. Each ADDS a condition, so they can
+  # only reject trades the seven-gate screen would have approved -- never approve
+  # one it rejected. Turning them on is therefore the conservative direction.
+  #
+  # The instruction above used to read "turn them on ONE AT A TIME and
+  # walk-forward before going live". The walk-forward has now been done, over
+  # all 3,547 closed positions from the live MT5 account, and it says the
+  # opposite: individually they FAIL, and only the full set holds.
+  # (scripts/gate_split.py, chronological split, PF vs the shipped baseline)
+  #
+  #   configuration                     full     1st half    2nd half   verdict
+  #   shipped baseline                  1.063      0.996       1.102     --
+  #   + broad gates only  (A)           0.964      0.636       1.133     FAILS
+  #   + narrow gates only (B)           1.093      1.088       1.095     FAILS
+  #   + BOTH                            1.123      1.141       1.115     HOLDS
+  #
+  # The gates were split by CORPUS BREADTH -- how many independent educators
+  # teach each concept, per bot/smc/consensus.py WEIGHTS. Group A is the widely
+  # taught half (target_at_level 0.77, candle 0.64, premium_discount 0.46);
+  # group B the narrowly taught half (mitigation 0.40, value_area 0.30, vwap
+  # 0.30, breaker 0.15, wyckoff 0.13).
+  #
+  # The result is the finding: breadth did NOT predict edge. The gates the field
+  # teaches MOST made things worse on their own (PF 1.063 -> 0.964, +1,887 ->
+  # -1,131). docs/KNOWLEDGE.md always said ranking measures how widely something
+  # is taught and never whether it works -- this is the first measurement of
+  # that claim, and it came back inverted.
+  #
+  # Honest limits: ~143 trades survive all gates, the second-half margin is thin
+  # (1.115 vs 1.102), and exits are the account's real exits, not the bot's.
+  #
+  # GATES ARE BINDING. The veto still decides whether a setup exists at all and
+  # is still the only thing that can start a trade -- nothing past it fires
+  # without the veto -- but past that point these gates can and do reject.
+  #
+  # This was briefly set to advisory on the strength of the aggregate CIs below,
+  # which showed no gated configuration separable from a losing one:
+  #
+  #   cohort                  n     win%   PF     PF 95% CI        exp/trade
+  #   veto only             600    57.5%  1.538  [1.083, 2.203]      73.1
+  #   veto + screen         149    40.3%  1.063  [0.580, 1.775]      12.7
+  #   veto + best half      141    41.1%  1.093  [0.593, 1.862]      18.8
+  #   veto + all gates      143    41.3%  1.123  [0.621, 1.924]      25.5
+  #
+  # That aggregate reading was CONFOUNDED, and decomposing it is what reversed
+  # the decision. Splitting the fired cohort by whether the bot's own direction
+  # matched the direction actually traded:
+  #
+  #   cohort                          n     win%       net      PF
+  #   direction MATCHED             171    38.6%    +2,872   1.086
+  #     gates approved              147    40.1%    +3,201   1.107
+  #     gates dissented              24    29.2%      -329   0.908
+  #   direction OPPOSED             495    65.9%   +48,487   1.985
+  #
+  # Holding direction constant the gates ADD value: 1.107 approved vs 0.908
+  # dissented, and dissent flips expectancy negative (+21.8 -> -13.7). The
+  # "gates look useless" reading was measuring the DIRECTION effect, not them.
+  #
+  # It also kills the headline number as a forecast. 74% of what the veto fires
+  # on is trades where the bot wanted the OPPOSITE side, carrying +48,487 of the
+  # +51,358 -- that P&L belongs to whoever took the other side. The bot's own
+  # matched cohort is 171 trades at PF 1.086, barely above break-even, and that
+  # is the honest proxy for this bot trading its own signals.
+  #
+  # Known weakness, on the record: the dissent sample is 24 trades. That is thin
+  # enough that this should be re-measured as gated trades accumulate --
+  # scripts/gate_split.py re-runs the whole comparison.
+  advisory_only: false
+  require_mitigation: true          # entry must sit in a zone price returned to AND respected
+  require_breaker: true             # entry must sit in a retested, polarity-flipped zone
+  require_candle_confirmation: true # a candle must confirm the direction before entry
+  candle_lookback: 3
+  candle_min_strength: 0.0          # raise toward 1.0 to demand a stronger pattern
+  #
+  # Gates 11-12, from the same corpus. Volume profile appears in 84 of 157
+  # videos and Wyckoff in 61, and neither was modelled here until now.
+  # NOTE on forex: bot/mt5/client.py maps MT5's tick_volume to `volume`, and
+  # tick volume counts price CHANGES, not contracts. A value area on EURUSDc is
+  # a proxy; on the CEX side the volume is genuine. Same code, different
+  # confidence.
+  require_wyckoff: true             # range bias (spring/upthrust) must agree with the trade
+  require_value_area_edge: true     # long at the value-area LOW, short at the HIGH
+  require_vwap_side: true           # entry on the correct side of VWAP
+  vwap_tolerance_pct: 0.002
+  volume_profile_bins: 50
+  #
+  # Gates 13-15, added after comparing gate coverage against what the corpus
+  # actually emphasises. take_profit is the SECOND most-discussed concept in
+  # 329 videos (263 videos, 2512 mentions) and had no gate at all -- gate 4
+  # only ever checked the RR ratio, never whether the target sits somewhere
+  # price might reach. That is the same failure as the 20% stop, one step later.
+  require_premium_discount: true    # long only in discount, short only in premium
+  require_target_at_level: true     # take-profit must sit at liquidity or a zone
+  target_tolerance_pct: 0.004
+  # min_consensus_score stays OFF: it was not part of the split that was
+  # measured, and an unmeasured gate is exactly what the walk-forward above
+  # exists to prevent.
+  # min_consensus_score: 0.25         # weighted vote across all ten concepts
+  #
+  # Which frame the CONCEPT gates read. Gates 1-7 are unaffected; gate 2 has
+  # always been the higher-timeframe check. Eleven of twelve gates previously
+  # read ONLY the entry frame, so a setup could satisfy every concept on the
+  # 15m while the 1h disagreed and nothing noticed. "both" is the top-down
+  # confirmation the corpus keeps describing -- and it removes trades, so
+  # measure before trusting it.
+  #   ltf (default) | htf | both
+  # gate_timeframe: both
+
+# Capital guard — daily-loss / drawdown circuit breaker + concurrent-risk caps.
+# Checked right before a --live order is sent; once halted it blocks new
+# entries until a new trading day starts or the balance recovers off its peak.
+capital_guard:
+  max_daily_loss_pct: 3.0
+  max_drawdown_pct: 10.0
+  max_concurrent_trades: 3
+  # Raised from 3.0 at explicit user request: fixed_risk_usd above means a
+  # single trade's risk_pct is now $3/combined_balance -- at the account's
+  # current ~$8 combined balance that's ~37.5%, which the old 3% cap would
+  # have blocked outright (silently, with no trade ever firing). This is a
+  # REAL loosening of a capital-preservation control, not a cosmetic
+  # change -- max_daily_loss_pct/max_drawdown_pct above are UNCHANGED and
+  # still the backstop if a trade goes against the account.
+  max_concurrent_open_risk_pct: 40.0
+  # Everything below is OFF by default (uncomment to enable) — added for the
+  # "self-evolving bot" blueprint's Section 7 breakers. Each is independent;
+  # turning one on doesn't change the others' behavior.
+  # max_weekly_loss_pct: 6.0             # halts for a fixed 48h once tripped
+  # consecutive_loss_limit: 3            # halves new-trade size until 2 wins in a row
+  # vix_halt_threshold: 30.0             # needs `vix=` passed into CapitalGuard.update()
+  # correlated_crash_btc_pct: -5.0       # both this AND spx_pct must trip together
+  # correlated_crash_spx_pct: -3.0
+  # liquidity_shock_spread_pct: 0.1
+  # liquidity_shock_volume_drop_pct: -50.0
+  # profit_lock_trigger_pct: 20.0        # check_profit_lock() reports a lock amount; a human executes the move
+  # profit_lock_fraction: 0.10
+
+# Trading-knowledge ingestion (bot/knowledge/, scripts/knowledge_ingest.py).
+# REPORT ONLY. Nothing under bot/knowledge/ is imported by the live trading
+# path, and nothing there writes this file -- the pipeline produces ranked,
+# cited rule candidates and prints the config edit for a human to make, the
+# same boundary capital_guard's profit-lock and entry_rules already draw.
+knowledge:
+  enabled: true
+  # Path to a yt-dlp BINARY (never imported -- it ships its own interpreter and
+  # is updated far more often than this repo). Blank searches PATH; $YTDLP_PATH
+  # in .env also works. On this machine the only existing copy lives in an
+  # unrelated project's venv, so point at it explicitly or `pip install yt-dlp`.
+  # Points at venv-knowledge/, a SEPARATE venv from the trading venv. Whisper
+  # drags in ctranslate2/onnxruntime and can move numpy, and venv/ is what runs
+  # com.smc.autotrader -- so the ingestion toolchain is kept out of it entirely.
+  # Both venvs live inside this project; neither reaches into another repo.
+  ytdlp_path: "/Users/mac/Projects/smc-trading-bot/venv-knowledge/bin/yt-dlp"
+  data_dir: knowledge
+  search_limit: 25
+  max_videos_per_channel: 60   # 3 new channels; 250 each would re-trigger the bot-check
+  min_video_seconds: 120       # skip Shorts -- no rule is taught in 45 seconds
+  max_video_seconds: 10800
+  segment_seconds: 30.0        # concept matching + quoting happen on these chunks
+  segment_max_chars: 600
+  min_support_videos: 2        # one throwaway sentence is not a finding
+  whisper:
+    # Fallback ASR for videos with NO captions. Off by default: captions are
+    # seconds per video, Whisper is minutes, and max_videos_per_run stops a
+    # routine ingest quietly becoming an overnight job. Full coverage of an
+    # uncaptioned backlog is reached across runs, on purpose.
+    # ON, and uncapped for a full-channel backfill. Only ~10% of this channel's
+    # videos have captions, so without ASR the corpus would cover a tenth of it.
+    # This is an hours-long run by nature: faster-whisper base on CPU is roughly
+    # 5-10x realtime, so ~200 uncaptioned videos is 8-12h. Lower
+    # max_videos_per_run back to single digits for routine incremental runs.
+    enabled: true
+    model: base
+    # Bounded per run, on purpose. 250 turned a single ingest into an
+    # open-ended job, and when YouTube started bot-checking, the run churned
+    # through ~100 videos failing before anyone noticed. 25 is a few hours at
+    # worst, makes real progress on the uncaptioned backlog across repeated
+    # runs, and pairs with max_consecutive_failures so a blocked run stops
+    # early instead of hammering the source.
+    max_videos_per_run: 25
+  llm:
+    # Optional local ollama pass. It never DETECTS concepts (taxonomy.py does
+    # that, deterministically) -- it only proposes a value for a segment that
+    # already scored one, and its output is discarded unless the parameter name
+    # is on the allow-list, the value is in range, AND the number appears
+    # verbatim in the quoted text.
+    enabled: true
+    endpoint: "http://127.0.0.1:11434"
+    model: "qwen2.5:14b"
+    max_segments_per_video: 40
