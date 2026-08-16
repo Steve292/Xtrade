@@ -116,13 +116,27 @@ def evaluate(df: pd.DataFrame, name: str, mask: np.ndarray, baseline: float) -> 
     wa = 100 * a.win.mean() if len(a) else 0.0
     wb = 100 * b.win.mean() if len(b) else 0.0
 
+    # EACH HALF AGAINST ITS OWN BASELINE, not the pooled one.
+    #
+    # This was a bug worth recording. Comparing both halves to the overall
+    # baseline penalises a configuration for the MARKET deteriorating rather
+    # than the configuration deteriorating. On this history the second half is
+    # materially worse -- baseline win rate 46.8% against 51.9% in the first --
+    # so a pooled 49.4% bar is too high for the second half and too low for the
+    # first. It rejected `veto`, which beat its own half's baseline in both
+    # (62.0 vs 51.9, 47.9 vs 46.8) and made +5,926 in a half where taking
+    # everything lost -14,099.
+    base_a = 100 * df[df.index < mid].win.mean()
+    base_b = 100 * df[df.index >= mid].win.mean()
+
     reasons = []
     if n < MIN_TRADES:
         reasons.append(f"n={n} below the {MIN_TRADES}-trade floor")
     if len(a) < 5 or len(b) < 5:
         reasons.append("too few trades in one half to split-test")
-    elif not (wa > baseline and wb > baseline):
-        reasons.append(f"does not beat baseline in both halves ({wa:.1f} / {wb:.1f})")
+    elif not (wa > base_a and wb > base_b):
+        reasons.append(f"loses to its own half baseline "
+                       f"({wa:.1f} vs {base_a:.1f} / {wb:.1f} vs {base_b:.1f})")
     if lower <= baseline:
         reasons.append(f"95% lower bound {lower:.1f}% does not clear baseline {baseline:.1f}%")
     if len(a) >= 5 and len(b) >= 5 and (wa - wb) > DEGRADE_TOL:
