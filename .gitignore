@@ -39,6 +39,10 @@ dominance_history.json
 # human authorization record; knowledge_candidates.json holds review decisions.
 knowledge_channels.json
 knowledge_candidates.json
+# scripts/knowledge_daemon.py backoff/cycle state. Machine-local, and it must
+# NOT be shared: the backoff counter is how the daemon avoids hammering a
+# source that is already throttling this address.
+knowledge_daemon_state.json
 # Leading slash matters: an unanchored "knowledge/" also matches bot/knowledge/
 # and would silently exclude this feature's entire source tree from the repo.
 /knowledge/
