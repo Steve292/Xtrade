@@ -23,6 +23,7 @@ from bot.position_sizing import risk_pct_for_fixed_usd, staged_fixed_risk_usd
 from bot.risk import calc_lot_size, calc_position_size
 from bot.screening import ScreenConfig, TradeScreener
 from bot.smc.strategy import SMCStrategy, SignalType
+from bot import trade_review
 from bot.unified_screen import evaluate_unified
 from bot.wallet import DefiWallet
 
@@ -205,6 +206,10 @@ def run_bot(config_path: str = "config.yaml") -> None:
     print("=" * 60)
     print("  Scanning for SMC confluence...\n")
 
+    # Abstention veto tallies, session-cumulative. Kept outside the loop so the
+    # count is "how often did we decline this session", not per-pass noise.
+    veto_counts: dict[str, int] = {}
+
     while True:
         try:
             open_count = sum(1 for item in watchlist if item["executor"].position is not None)
@@ -288,15 +293,36 @@ def run_bot(config_path: str = "config.yaml") -> None:
                         print(f"[{sym}] blocked by combined ledger: {combined_guard.halt_reason}")
                         continue
 
-                    signal = strategy.analyze(df, htf_df)
-                    screen_result = screener.screen(signal, df, htf_df) if signal.type != SignalType.NONE else None
-                    unified = (
-                        evaluate_unified(signal, screen_result, sm_direction, sm_bullish, sm_bearish)
-                        if signal.type != SignalType.NONE
-                        else None
+                    # Abstention veto (bot/trade_review.py). This is the single
+                    # gate on "is there a setup here at all", replacing the
+                    # `signal.type != NONE` test that used to be repeated three
+                    # times below. Two things it adds over the inline form:
+                    # it FAILS CLOSED (a detector raising used to propagate out
+                    # of the scan loop rather than skip the symbol), and every
+                    # abstention is counted instead of vanishing.
+                    #
+                    # Measured over 3,547 real positions: the cohort with no SMC
+                    # setup lost 33,859 at PF 0.912, and the rule held on a
+                    # chronological out-of-sample split. See bot/trade_review.py.
+                    verdict = trade_review.review(strategy, df, htf_df)
+                    if not verdict.allowed:
+                        key = verdict.reason.split("(")[0].strip()
+                        veto_counts[key] = veto_counts.get(key, 0) + 1
+                        ts = df.iloc[-1]["timestamp"]
+                        prefix = f"[{sym}] " if multi else ""
+                        print(f"{prefix}[{ts}] No trade — {verdict.reason} | "
+                              f"Price: {current_price:.{price_decimals}f}")
+                        continue
+
+                    # Guaranteed non-NONE past the veto, and reused from the
+                    # verdict so the strategy is not run twice per symbol.
+                    signal = verdict.signal
+                    screen_result = screener.screen(signal, df, htf_df)
+                    unified = evaluate_unified(
+                        signal, screen_result, sm_direction, sm_bullish, sm_bearish
                     )
 
-                    if signal.type != SignalType.NONE and unified.approved:
+                    if unified.approved:
                         if venue == "evm" and evm_dex:
                             balance = evm_dex.get_usdc_balance()
                         else:
@@ -413,9 +439,11 @@ def run_bot(config_path: str = "config.yaml") -> None:
                                   f"entry={signal.entry:.6g} SL={signal.stop_loss:.6g} TP={signal.take_profit:.6g}")
                             print(f"        Confidence: {signal.confidence:.0%} | Final: {unified.final_pct:.0f}%")
                             open_count += 1
-                    elif signal.type != SignalType.NONE:
+                    else:
                         # SMC found a candidate but the unified gate (structure +
                         # smart money) rejected it — report whichever layer blocked.
+                        # The no-signal case never reaches here any more; the veto
+                        # above skips the symbol and logs it.
                         ts = df.iloc[-1]["timestamp"]
                         prefix = f"[{sym}] " if multi else ""
                         if not unified.structure_ok:
@@ -425,11 +453,6 @@ def run_bot(config_path: str = "config.yaml") -> None:
                             detail = f"rejected: {unified.reason}"
                         print(f"{prefix}[{ts}] SIGNAL {signal.type.value.upper()} "
                               f"conf {signal.confidence:.0%} final {unified.final_pct:.0f}% {detail}")
-                    else:
-                        ts = df.iloc[-1]["timestamp"]
-                        prefix = f"[{sym}] " if multi else ""
-                        print(f"{prefix}[{ts}] No signal — {signal.reason} | "
-                              f"Price: {current_price:.{price_decimals}f}")
                 except Exception as e:
                     print(f"[{sym}] Error: {e}")
 

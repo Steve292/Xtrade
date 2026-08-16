@@ -135,21 +135,36 @@ def test_summarize_reports_losses_avoided():
     assert summarize(ReviewStats()) == "no trades reviewed"
 
 
-def test_module_is_not_on_the_live_execute_path():
-    """Advisory only, mirroring the bot/knowledge boundary discipline.
+def test_veto_is_armed_on_the_live_execute_path():
+    """The veto is ARMED in bot/runner.py as of the decision to wire it in.
 
-    Importing this module must not be enough to change live behaviour, so no
-    live entry point may import it until that is a deliberate decision.
+    This started life as the opposite assertion -- that no live entry point
+    imported the module -- so that arming it could not happen as a side effect
+    of someone adding an import. It was flipped deliberately. Keeping the test
+    (rather than deleting it) means DISarming is equally deliberate: remove the
+    veto and this fails.
     """
     root = Path(__file__).resolve().parents[1]
-    for rel in ("bot/runner.py", "hypertrade.py"):
-        p = root / rel
-        if not p.exists():
-            continue
-        assert "trade_review" not in p.read_text(), (
-            f"{rel} imports bot.trade_review -- wiring the veto into the live "
-            f"execute path is a deliberate change; update this test on purpose."
-        )
+    runner = (root / "bot/runner.py").read_text()
+    assert "trade_review" in runner, "the veto must stay wired into bot/runner.py"
+    assert "verdict.allowed" in runner, (
+        "runner must branch on the verdict, not merely import the module"
+    )
+
+
+def test_runner_has_no_second_no_signal_gate():
+    """The veto must be the ONLY 'is there a setup' test in the live path.
+
+    Two gates asking the same question is how they drift apart: one gets
+    updated, the other silently keeps the old behaviour. The inline
+    `signal.type != SignalType.NONE` checks the veto replaced must stay gone.
+    """
+    root = Path(__file__).resolve().parents[1]
+    src = (root / "bot/runner.py").read_text()
+    assert "signal.type != SignalType.NONE" not in src, (
+        "bot/runner.py still has an inline no-signal check; the veto in "
+        "bot/trade_review.py is meant to be the single gate."
+    )
 
 
 def _run_all() -> bool:

@@ -54,12 +54,19 @@ __all__ = ["Verdict", "ReviewStats", "allows", "review", "summarize"]
 
 @dataclass
 class Verdict:
-    """The outcome of reviewing one proposed trade."""
+    """The outcome of reviewing one proposed trade.
+
+    `signal` carries the Signal that analyze() produced so a caller that acts
+    on an ALLOW does not have to run the strategy a second time. It is None on
+    every veto, which is what makes the veto unable to originate a trade: there
+    is nothing to act on unless the strategy already said there was.
+    """
 
     allowed: bool
     reason: str
     signal_type: str = "none"
     confidence: float = 0.0
+    signal: object | None = None
 
     def __str__(self) -> str:  # pragma: no cover - display only
         return f"{'ALLOW' if self.allowed else 'VETO '}  {self.reason}"
@@ -89,6 +96,7 @@ def review(
         f"SMC setup present ({signal.type.value}, {signal.confidence:.0%})",
         signal_type=signal.type.value,
         confidence=float(signal.confidence),
+        signal=signal,
     )
 
 

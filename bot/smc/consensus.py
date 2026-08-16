@@ -45,40 +45,51 @@ AGREE = "agree"
 DISAGREE = "disagree"
 ABSTAIN = "abstain"
 
-# channels-out-of-4 that discussed the concept, from the 329-document corpus.
-# 4/4 concepts weigh most; single-channel concepts weigh least.
+# Derived from the corpus, recomputed each time it grows. Regenerate with
+#   python scripts/derive_weights.py --diff
 WEIGHTS: dict = {
-    # DERIVED, not chosen. weight = (channels discussing it / 6) x (share of
-    # the 448 documents that mention it), normalised so the top concept is 1.0.
-    # Recomputed against the final 6-channel / 2,088,590-word / 207-hour corpus
-    # after two channels selected for methodological similarity were added.
+    # DERIVED, not chosen. weight = (channels discussing it / 10) x (share of
+    # the 639 documents that mention it), normalised so the top concept is 1.0.
+    # Third derivation: 4 channels -> 6 -> 10, now 639 documents / 2,837,374
+    # words, after adding ICT (the origin of most of this vocabulary), Fractal
+    # Flow and JeaFx.
     #
-    # Every weight fell except structure, and that is the finding: the original
-    # four channels were more homogeneous than they looked, so concepts that
-    # scored 4-of-4 there were partly measuring my channel selection rather
-    # than the field. mitigation is the clearest case -- it was 1.0, the joint
-    # highest, on 4-of-4 coverage; across six channels it is 52% of documents
-    # and drops to 0.58. Still broadly used, no longer treated as near-universal.
+    # History worth keeping, because the direction of travel is the finding:
+    #
+    #   concept      4ch    6ch    10ch
+    #   structure    1.00   1.00   1.00
+    #   mitigation   1.00   0.58   0.40
+    #   candle       --     0.53   0.64
+    #   wyckoff      0.30   0.12   0.13
+    #
+    # mitigation has now fallen twice, from joint-highest to 0.40. Each time
+    # the sample widened it got smaller, which is what a channel-selection
+    # artifact looks like -- not what a real consensus looks like. It is no
+    # longer close to universal and should not be gated on as if it were.
+    #
+    # candle is the one that ROSE (0.53 -> 0.64, 9 channels, 56% of documents),
+    # and it is the uncomfortable one: docs/KNOWLEDGE.md records that every
+    # candlestick concept maps to NOTHING in this codebase. The wider corpus
+    # makes that gap larger, not smaller. Widening the sample cannot close it;
+    # only writing the detectors can.
+    #
+    # wyckoff ticked up 0.12 -> 0.13 on 7 channels. Still the lowest weight,
+    # and still correctly so -- but it is no longer the single-source artifact
+    # it was at 4 channels (61 of 62 videos from one source).
     #
     # The ratio is what matters, not the scale: the score divides by
-    # participating weight, so this is a weighted average. Structure now
-    # outweighs wyckoff 8:1 where it previously did 3.3:1.
-    #
-    # Wyckoff moved the other way and deserves the correction on the record: it
-    # was 2 channels (61 of 62 videos from one source) and is now 4 channels,
-    # 16% of documents. Still the lowest weight, no longer a single-source
-    # artifact.
-    "structure": 1.00,        # 6 ch, 397 docs, 89%
-    "take_profit": 0.87,      # 6 ch, 346 docs, 77%
-    "liquidity_sweep": 0.76,  # 6 ch, 300 docs, 67%
-    "mitigation": 0.58,       # 6 ch, 232 docs, 52%   (was 1.0)
-    "candle": 0.53,           # 6 ch, 210 docs, 47%
-    "premium_discount": 0.46, # 6 ch, 182 docs, 41%
-    "volume_profile": 0.37,   # 5 ch, 178 docs, 40%   (incl. VWAP)
-    "supply_demand": 0.34,    # 5 ch, 162 docs, 36%
-    "fibonacci": 0.29,        # 6 ch, 114 docs, 25%
-    "breaker": 0.18,          # 4 ch, 110 docs, 25%
-    "wyckoff": 0.12,          # 4 ch,  72 docs, 16%
+    # participating weight, so this is a weighted average.
+    "structure": 1.00,        # 9 ch, 558 docs, 87%
+    "take_profit": 0.77,      # 9 ch, 430 docs, 67%
+    "liquidity_sweep": 0.74,  # 9 ch, 414 docs, 65%
+    "candle": 0.64,           # 9 ch, 357 docs, 56%   (was 0.53)
+    "premium_discount": 0.46, # 9 ch, 255 docs, 40%
+    "mitigation": 0.40,       # 8 ch, 251 docs, 39%   (was 1.0, then 0.58)
+    "supply_demand": 0.32,    # 8 ch, 200 docs, 31%
+    "fibonacci": 0.31,        # 9 ch, 172 docs, 27%
+    "volume_profile": 0.30,   # 7 ch, 213 docs, 33%   (incl. VWAP)
+    "breaker": 0.15,          # 6 ch, 127 docs, 20%
+    "wyckoff": 0.13,          # 7 ch,  91 docs, 14%
 }
 
 
