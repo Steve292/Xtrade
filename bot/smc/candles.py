@@ -27,7 +27,10 @@ import pandas as pd
 @dataclass
 class CandlePattern:
     index: int
-    name: str          # engulfing | pin_bar | doji | inside_bar | outside_bar | marubozu
+    # single/two-candle: engulfing | pin_bar | doji | inside_bar | outside_bar
+    #                    marubozu | tweezer_top | tweezer_bottom
+    # three-candle:      morning_star | evening_star | three_soldiers | three_crows
+    name: str
     direction: str     # "bullish" | "bearish" | "neutral"
     strength: float    # 0.0-1.0, pattern-specific conviction
 
@@ -164,8 +167,139 @@ def detect_marubozu(df: pd.DataFrame, i: int,
     return None
 
 
+def detect_star(df: pd.DataFrame, i: int,
+                max_star_body_pct: float = 0.4,
+                min_penetration: float = 0.5) -> CandlePattern | None:
+    """Morning star (bullish) / evening star (bearish) — three-candle reversal.
+
+    The shape the corpus describes: a decisive candle, then a small-bodied
+    pause that stalls it, then a candle closing back deep into the first. The
+    penetration requirement is what separates this from "three candles that
+    happen to alternate" -- without it almost any hesitation qualifies.
+
+    Deliberately requires a CLOSE back inside the first body rather than a gap.
+    Gaps are a stock-market artifact; FX and crypto trade continuously and a
+    gap-based definition would almost never fire on this bot's instruments.
+    """
+    if i < 2:
+        return None
+    o1, _h1, _l1, c1 = _parts(df, i - 2)
+    _o2, _h2, _l2, _c2 = _parts(df, i - 1)
+    o3, _h3, _l3, c3 = _parts(df, i)
+
+    first_body = abs(c1 - o1)
+    star_rng = candle_range(df, i - 1)
+    if first_body <= 0 or star_rng <= 0:
+        return None
+    # middle candle must be small RELATIVE TO ITS OWN RANGE and to the first
+    if body(df, i - 1) / star_rng > max_star_body_pct:
+        return None
+    if body(df, i - 1) > first_body * 0.6:
+        return None
+
+    down_then_up = c1 < o1 and c3 > o3          # morning star
+    up_then_down = c1 > o1 and c3 < o3          # evening star
+    if not (down_then_up or up_then_down):
+        return None
+
+    # how far the third candle closed back into the first candle's body
+    penetration = (abs(c3 - c1) / first_body) if first_body else 0.0
+    if down_then_up and not (c3 > c1 and penetration >= min_penetration):
+        return None
+    if up_then_down and not (c3 < c1 and penetration >= min_penetration):
+        return None
+
+    return CandlePattern(i, "morning_star" if down_then_up else "evening_star",
+                         "bullish" if down_then_up else "bearish",
+                         min(1.0, penetration))
+
+
+def detect_three_soldiers(df: pd.DataFrame, i: int,
+                          min_body_pct: float = 0.5) -> CandlePattern | None:
+    """Three white soldiers / three black crows — three-candle continuation.
+
+    Three same-direction candles, each closing beyond the last and each opening
+    inside the previous body. The open-inside test is what makes this a
+    sustained push rather than three disconnected candles: a gap-open sequence
+    is a different phenomenon and reads as exhaustion more often than strength.
+    """
+    if i < 2:
+        return None
+    bulls = [is_bullish(df, j) for j in (i - 2, i - 1, i)]
+    if len(set(bulls)) != 1:
+        return None
+    up = bulls[0]
+
+    for j in (i - 2, i - 1, i):
+        rng = candle_range(df, j)
+        if rng <= 0 or body(df, j) / rng < min_body_pct:
+            return None            # doji-ish candles are not soldiers
+
+    closes = [float(df.iloc[j]["close"]) for j in (i - 2, i - 1, i)]
+    if up and not (closes[0] < closes[1] < closes[2]):
+        return None
+    if not up and not (closes[0] > closes[1] > closes[2]):
+        return None
+
+    # each open must sit inside the previous body
+    for prev, cur in ((i - 2, i - 1), (i - 1, i)):
+        po, _ph, _pl, pc = _parts(df, prev)
+        co, _ch, _cl, _cc = _parts(df, cur)
+        lo, hi = min(po, pc), max(po, pc)
+        if not (lo <= co <= hi):
+            return None
+
+    span = abs(closes[2] - closes[0])
+    total_rng = sum(candle_range(df, j) for j in (i - 2, i - 1, i))
+    strength = min(1.0, span / total_rng) if total_rng > 0 else 0.0
+    return CandlePattern(i, "three_soldiers" if up else "three_crows",
+                         "bullish" if up else "bearish", strength)
+
+
+def detect_tweezer(df: pd.DataFrame, i: int,
+                   tolerance_pct: float = 0.0005) -> CandlePattern | None:
+    """Tweezer top / bottom — two candles rejecting from the same level.
+
+    Two attempts at the same extreme, the second failing, with the bodies
+    opposing. Tolerance is fractional rather than absolute so the same setting
+    works on EURUSD at 1.08 and BTC at 60,000 -- an absolute tick tolerance
+    would make this fire constantly on one and never on the other.
+    """
+    if i < 1:
+        return None
+    _o1, h1, l1, _c1 = _parts(df, i - 1)
+    _o2, h2, l2, _c2 = _parts(df, i)
+    prev_bull, cur_bull = is_bullish(df, i - 1), is_bullish(df, i)
+    if prev_bull == cur_bull:
+        return None                # tweezers need the second candle to oppose
+
+    # tweezer TOP: matching highs, up then down
+    if prev_bull and not cur_bull and h1 > 0:
+        if abs(h1 - h2) / h1 <= tolerance_pct:
+            rng = max(candle_range(df, i), 1e-12)
+            return CandlePattern(i, "tweezer_top", "bearish",
+                                 min(1.0, upper_wick(df, i) / rng + 0.5))
+    # tweezer BOTTOM: matching lows, down then up
+    if (not prev_bull) and cur_bull and l1 > 0:
+        if abs(l1 - l2) / l1 <= tolerance_pct:
+            rng = max(candle_range(df, i), 1e-12)
+            return CandlePattern(i, "tweezer_bottom", "bullish",
+                                 min(1.0, lower_wick(df, i) / rng + 0.5))
+    return None
+
+
+# Order matters only for readability; detect_candles collects all matches.
+#
+# NOTE ON ADDING TO THIS TUPLE: confirms() returns the most recent AGREEING
+# pattern, so every detector added here makes the optional candle gate easier
+# to satisfy, not harder. That is a loosening. It is acceptable for these three
+# because each requires a multi-candle structure -- penetration, monotonic
+# closes, or a matched extreme -- rather than a single-candle shape that fires
+# on noise. A detector that matched more loosely would belong behind its own
+# flag instead.
 _DETECTORS = (detect_engulfing, detect_pin_bar, detect_marubozu,
-              detect_outside_bar, detect_inside_bar, detect_doji)
+              detect_outside_bar, detect_inside_bar, detect_doji,
+              detect_star, detect_three_soldiers, detect_tweezer)
 
 
 def detect_candles(df: pd.DataFrame, lookback: int = 5) -> list[CandlePattern]:

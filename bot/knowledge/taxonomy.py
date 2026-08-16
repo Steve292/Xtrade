@@ -169,9 +169,15 @@ _RISK = [
 # bot/smc/candles.py: a repo-wide search for engulf/doji/hammer/pin bar/
 # harami/marubozu returned nothing, so the seven-gate screen could not see a
 # rejection wick or require a close beyond a level. They now map to real
-# detectors. star_pattern stays unmapped -- multi-candle star and soldier
-# formations are genuinely not implemented, and claiming otherwise would put
-# a concept on the 'covered' side of review --unmapped that nothing covers.
+# detectors. star_pattern now maps too: detect_star, detect_three_soldiers and
+# detect_tweezer cover the multi-candle formations its terms name, so it is no
+# longer a concept sitting on the 'covered' side of review --unmapped that
+# nothing covers.
+#
+# Worth recording that this was the LAST candlestick gap and the smallest one.
+# star_pattern is 8 of 639 documents (1%, 4 channels) against 18% for
+# inducement, which remains unmapped. Closing it completes the family; it does
+# not close the largest hole.
 #
 # So the bot currently screens seven gates and none of them can see a rejection
 # wick. Ingesting educator content about candles is therefore guaranteed to
@@ -203,7 +209,8 @@ _CANDLES = [
                maps_to="bot.smc.candles"),
     ConceptDef("star_pattern", "star reversal pattern", "candle",
                ["morning star", "evening star", "three white soldiers",
-                "three black crows", "tweezer top", "tweezer bottom"]),
+                "three black crows", "tweezer top", "tweezer bottom"],
+               maps_to="bot.smc.candles"),
     ConceptDef("candle_close", "candle close confirmation", "candle",
                ["candle close", "body close", "closes above", "closes below",
                 "close confirmation", "wait for the close", "body to wick",
