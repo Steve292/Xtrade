@@ -209,6 +209,10 @@ def run_bot(config_path: str = "config.yaml") -> None:
     # Abstention veto tallies, session-cumulative. Kept outside the loop so the
     # count is "how often did we decline this session", not per-pass noise.
     veto_counts: dict[str, int] = {}
+    # Last indicator dissent per symbol, when the gates are advisory. Recorded
+    # so "the gates disagreed and we traded anyway" is inspectable after the
+    # fact rather than only scrolling past in the log.
+    indicator_notes: dict[str, list] = {}
 
     while True:
         try:
@@ -322,7 +326,36 @@ def run_bot(config_path: str = "config.yaml") -> None:
                         signal, screen_result, sm_direction, sm_bullish, sm_bearish
                     )
 
-                    if unified.approved:
+                    # THE VETO IS THE ONLY THING THAT CAN STOP A TRADE.
+                    #
+                    # In advisory mode the gates still run and still report an
+                    # honest verdict -- they are INDICATORS, printed on every
+                    # pass -- but they cannot reject. Anything that survived the
+                    # veto above fires.
+                    #
+                    # Why: measured over 3,547 real positions with bootstrap
+                    # CIs, no gated configuration separated from a losing one.
+                    # veto+best-half was PF 1.093 on a [0.593, 1.862] interval
+                    # with expectancy indistinguishable from zero, and the gates
+                    # moved PF by +0.03..0.06 while cutting the sample from 600
+                    # to ~141. A filter that quadruples your uncertainty and
+                    # leaves the estimate inside the noise is not a filter.
+                    #
+                    # Set screening.advisory_only: false to make them binding
+                    # again -- the checks and their reasons are unchanged, only
+                    # whether this branch honours them.
+                    advisory = getattr(screener.cfg, "advisory_only", False)
+                    if advisory and not unified.approved:
+                        ts = df.iloc[-1]["timestamp"]
+                        prefix = f"[{sym}] " if multi else ""
+                        failed = [c.name for c in screen_result.checks if not c.passed]
+                        indicator_notes[sym] = failed
+                        print(f"{prefix}[{ts}] INDICATORS DISSENT ({len(failed)}): "
+                              f"{', '.join(failed[:4])}"
+                              f"{'...' if len(failed) > 4 else ''} — "
+                              f"firing on veto anyway (advisory_only)")
+
+                    if unified.approved or advisory:
                         if venue == "evm" and evm_dex:
                             balance = evm_dex.get_usdc_balance()
                         else:

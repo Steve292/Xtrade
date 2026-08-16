@@ -187,6 +187,29 @@ screening:
   #
   # Honest limits: ~143 trades survive all gates, the second-half margin is thin
   # (1.115 vs 1.102), and exits are the account's real exits, not the bot's.
+  #
+  # ADVISORY: the gates below are INDICATORS. They all run, they all report, and
+  # none of them can stop a trade. The abstention veto in bot/trade_review.py is
+  # the only thing that fires or blocks.
+  #
+  # Bootstrap CIs over the same 3,547 positions are why. No gated configuration
+  # could be told apart from a losing one:
+  #
+  #   cohort                  n     win%   PF     PF 95% CI        exp/trade
+  #   veto only             600    57.5%  1.538  [1.083, 2.203]      73.1
+  #   veto + screen         149    40.3%  1.063  [0.580, 1.775]      12.7
+  #   veto + best half      141    41.1%  1.093  [0.593, 1.862]      18.8
+  #   veto + all gates      143    41.3%  1.123  [0.621, 1.924]      25.5
+  #
+  # Every gated interval contains PF < 1.0, and veto+best-half's expectancy is
+  # +18.78 +/- 122.71 -- not distinguishable from zero. The gates moved PF by
+  # +0.03..0.06 while cutting the sample from 600 to ~141: they multiplied the
+  # uncertainty without moving the estimate.
+  #
+  # Set to false to make the gates binding again. Nothing else changes: the
+  # checks, their reasons and ScreenResult.approved are identical either way,
+  # only whether bot/runner.py honours the verdict.
+  advisory_only: true
   require_mitigation: true          # entry must sit in a zone price returned to AND respected
   require_breaker: true             # entry must sit in a retested, polarity-flipped zone
   require_candle_confirmation: true # a candle must confirm the direction before entry

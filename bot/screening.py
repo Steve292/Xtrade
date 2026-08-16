@@ -153,6 +153,22 @@ class ScreenConfig:
     # system quietly reintroduces terrible trades.
     hard_checks: tuple = ("SMC confluence", "Risk/reward")
 
+    # ADVISORY MODE. When true the screen still runs every check and still
+    # reports an honest `approved`, but the caller is expected not to treat that
+    # verdict as binding -- the gates become INDICATORS and the abstention veto
+    # in bot/trade_review.py becomes the only thing that can stop a trade.
+    #
+    # This flag changes nothing inside screen(). ScreenResult.approved must keep
+    # meaning "did the gates approve", or every log line and test that reads it
+    # starts lying. Honouring it is bot/runner.py's decision, and lives there.
+    #
+    # Why it exists: measured over 3,547 real positions with bootstrap CIs, no
+    # gated configuration could be distinguished from a losing one --
+    # veto+best-half PF 1.093 with a 95% interval of [0.593, 1.862] and an
+    # expectancy indistinguishable from zero. The gates moved PF by +0.03..0.06,
+    # inside the noise, while cutting the sample from 600 trades to ~141.
+    advisory_only: bool = False
+
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
         return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})

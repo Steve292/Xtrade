@@ -167,6 +167,67 @@ def test_runner_has_no_second_no_signal_gate():
     )
 
 
+def test_gates_are_advisory_in_config():
+    """The eight optional gates run as indicators, not vetoes."""
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    cfg = yaml.safe_load((root / "config.yaml").read_text())
+    assert cfg["screening"].get("advisory_only") is True, (
+        "screening.advisory_only must stay true: the veto is the only gate "
+        "allowed to stop a trade"
+    )
+
+
+def test_screen_still_reports_an_honest_verdict_under_advisory():
+    """advisory_only must not change what screen() computes.
+
+    If it silently forced approved=True, every log line and downstream test
+    reading ScreenResult.approved would start lying about what the gates said.
+    """
+    from bot.screening import ScreenConfig
+
+    assert ScreenConfig().advisory_only is False, "advisory must be opt-in"
+    src = (Path(__file__).resolve().parents[1] / "bot/screening.py").read_text()
+    body = src.split("def screen(")[1]
+    assert "advisory_only" not in body, (
+        "screen() must not read advisory_only -- honouring it is the caller's "
+        "job, so ScreenResult.approved keeps meaning 'did the gates approve'"
+    )
+
+
+def test_advisory_cannot_bypass_the_veto():
+    """ORDER MATTERS. The veto's `continue` must come BEFORE the advisory branch.
+
+    If advisory were evaluated first, or the veto's skip were made conditional
+    on it, a no-setup trade could fire -- which is precisely the 2,947-trade
+    cohort that lost 33,859 at PF 0.912.
+    """
+    src = (Path(__file__).resolve().parents[1] / "bot/runner.py").read_text()
+    veto_skip = src.index("if not verdict.allowed:")
+    advisory = src.index("advisory = getattr(screener.cfg")
+    assert veto_skip < advisory, (
+        "the veto must be evaluated and able to `continue` before advisory "
+        "mode is consulted"
+    )
+    # and the veto's skip must be unconditional. Strip comments first -- the
+    # block is heavily commented and the word "advisory" appears in the prose
+    # explaining it, which is not the same as the code depending on it.
+    seg = src[veto_skip:advisory]
+    code = "\n".join(ln.split("#", 1)[0] for ln in seg.splitlines())
+    assert "continue" in code, "the veto branch must still skip the symbol"
+    assert "advisory" not in code, (
+        "the veto's skip must not depend on advisory mode"
+    )
+
+
+def test_runner_fires_on_the_veto_when_gates_dissent():
+    src = (Path(__file__).resolve().parents[1] / "bot/runner.py").read_text()
+    assert "if unified.approved or advisory:" in src, (
+        "runner must fire when the veto allows, even if the gates dissent"
+    )
+
+
 def _run_all() -> bool:
     ok = True
     for name, fn in sorted(globals().items()):
