@@ -141,3 +141,110 @@ def _run_all():
 
 if __name__ == "__main__":
     sys.exit(1 if _run_all() else 0)
+
+
+# --- knowledge confluence (advisory only) -----------------------------------
+# bot/knowledge.py layers the ingested corpus on as a third input. Two
+# properties below are load-bearing and must not regress: it cannot change
+# `approved`, and it cannot move final_pct further than the caller allowed.
+
+
+class _Knowledge:
+    """Stand-in for bot.knowledge.KnowledgeResult — evaluate_unified only ever
+    reads these three attributes, so the tests don't need the real corpus."""
+
+    def __init__(self, pct, available=True, reason="test"):
+        self.knowledge_pct = pct
+        self.available = available
+        self.reason = reason
+
+
+def test_omitting_knowledge_reproduces_the_previous_final_pct():
+    """The flag-off guarantee: callers that pass no knowledge result must get
+    byte-for-byte what this function returned before the layer existed."""
+    args = (_signal(SignalType.LONG, 0.8), _screen(True))
+    kwargs = dict(smart_money_direction="BULLISH", smart_money_bullish_count=4,
+                  smart_money_bearish_count=0)
+    baseline = evaluate_unified(*args, **kwargs)
+    assert _close(baseline.final_pct, (0.8 * 100 + (4 / 9) * 100) / 2)
+    assert baseline.knowledge_adjust == 0.0
+    assert baseline.knowledge_pct == 0.0
+
+
+def test_knowledge_cannot_approve_a_trade_the_gates_rejected():
+    for direction, bull, bear in (("BULLISH", 5, 0), ("BEARISH", 0, 5)):
+        rejected = evaluate_unified(
+            _signal(SignalType.LONG), _screen(False),
+            smart_money_direction=direction, smart_money_bullish_count=bull,
+            smart_money_bearish_count=bear,
+            knowledge_result=_Knowledge(100.0),
+        )
+        assert not rejected.approved, "knowledge must never flip approval"
+
+
+def test_knowledge_cannot_veto_a_trade_the_gates_approved():
+    approved = evaluate_unified(
+        _signal(SignalType.LONG), _screen(True),
+        smart_money_direction="BULLISH", smart_money_bullish_count=4,
+        smart_money_bearish_count=0,
+        knowledge_result=_Knowledge(0.0),
+    )
+    assert approved.approved, "knowledge is advisory — it does not veto either"
+
+
+def test_adjustment_never_exceeds_the_configured_cap():
+    base = evaluate_unified(
+        _signal(SignalType.LONG, 0.8), _screen(True),
+        smart_money_direction="BULLISH", smart_money_bullish_count=4,
+        smart_money_bearish_count=0,
+    ).final_pct
+
+    for pct in (0.0, 25.0, 50.0, 75.0, 100.0):
+        for cap in (0.0, 1.0, 5.0, 20.0):
+            result = evaluate_unified(
+                _signal(SignalType.LONG, 0.8), _screen(True),
+                smart_money_direction="BULLISH", smart_money_bullish_count=4,
+                smart_money_bearish_count=0,
+                knowledge_result=_Knowledge(pct), knowledge_max_adjust_pct=cap,
+            )
+            assert abs(result.knowledge_adjust) <= cap + 1e-9
+            assert abs(result.final_pct - base) <= cap + 1e-9
+
+
+def test_adjustment_is_signed_around_the_neutral_midpoint():
+    def adjust(pct):
+        return evaluate_unified(
+            _signal(SignalType.LONG, 0.8), _screen(True),
+            smart_money_direction="BULLISH", smart_money_bullish_count=4,
+            smart_money_bearish_count=0,
+            knowledge_result=_Knowledge(pct), knowledge_max_adjust_pct=5.0,
+        ).knowledge_adjust
+
+    assert adjust(100.0) > 0
+    assert _close(adjust(50.0), 0.0)
+    assert adjust(0.0) < 0
+
+
+def test_unavailable_knowledge_applies_no_adjustment():
+    """A missing corpus must read as no opinion. Treating it as a 0% score
+    would quietly dampen every setup and look exactly like the strategy
+    degrading."""
+    result = evaluate_unified(
+        _signal(SignalType.LONG, 0.8), _screen(True),
+        smart_money_direction="BULLISH", smart_money_bullish_count=4,
+        smart_money_bearish_count=0,
+        knowledge_result=_Knowledge(0.0, available=False),
+    )
+    assert result.knowledge_adjust == 0.0
+
+
+def test_final_pct_stays_within_zero_to_hundred():
+    for conf in (0.0, 0.5, 1.0):
+        for pct in (0.0, 100.0):
+            result = evaluate_unified(
+                _signal(SignalType.LONG, conf), _screen(True),
+                smart_money_direction="BULLISH", smart_money_bullish_count=9,
+                smart_money_bearish_count=0,
+                knowledge_result=_Knowledge(pct), knowledge_max_adjust_pct=50.0,
+            )
+            assert 0.0 <= result.final_pct <= 100.0

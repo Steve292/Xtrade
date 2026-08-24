@@ -119,3 +119,50 @@ capital_guard:
   # liquidity_shock_volume_drop_pct: -50.0
   # profit_lock_trigger_pct: 20.0        # check_profit_lock() reports a lock amount; a human executes the move
   # profit_lock_fraction: 0.10
+
+# --- Extended SMC detectors (bot/smc/{breaker,mitigation,candles,volume_profile}.py)
+# Four detectors added for the concepts the ingested corpus discusses most but
+# nothing in bot/smc/ modelled. They REFINE the confidence of a setup the
+# existing confluence gate already approved — they are not extra points in that
+# gate's score, so they cannot push a sub-threshold setup over the entry bar and
+# manufacture a trade. extended_max_adjust bounds the refinement in BOTH
+# directions; the upward bound is the one that matters, since confidence feeds
+# final_pct and final_pct decides unattended auto-fire.
+# OFF: analyze() returns bit-identical signals to before these existed.
+smc:
+  extended_detectors: false
+  extended_max_adjust: 0.10
+
+# --- Knowledge confluence (bot/knowledge.py)
+# Scores a live setup against the ingested transcript corpus (~1000 documents),
+# joining on the `maps_to` module names the corpus already carries. ADVISORY
+# ONLY: it moves final_pct by at most max_adjust_pct and can never change
+# whether a trade is approved. The corpus is unvetted third-party commentary
+# and does not get a vote on real orders.
+# corpus_path is relative to the working directory; the live checkout reaches
+# it through the `knowledge` symlink, which is NOT tracked in git, so set an
+# absolute path for any checkout that lacks it.
+# OFF: final_pct is computed exactly as before.
+knowledge:
+  enabled: false
+  corpus_path: knowledge/corpus.json
+  cache_path: .knowledge_weights.json
+  max_adjust_pct: 5.0
+
+# --- Adaptive position sizing (bot/position_sizing.py)
+# Activates the regime / hotness / volatility / confidence multiplier chain,
+# which until now was computed for the dashboard but never allowed to change
+# what a live trade risks. The multipliers modulate the staged fixed-dollar
+# risk above; they do not replace it with a BASE_RISK_PCT lookup (that table
+# has no forex bucket, and most of mt5_watchlist is forex).
+#
+# TWO caps apply, and both are needed:
+#   - final_risk_pct()'s MAX_COMBINED_MULTIPLIER (3.0) is RELATIVE — against
+#     $3 staged risk it authorises $9, which exceeds this account outright.
+#   - max_multiple / max_risk_usd below are ABSOLUTE, in dollars. These are
+#     the ones that actually bound the downside on a small balance.
+# OFF: effective_risk_pct is exactly risk_pct_for_fixed_usd()'s result.
+position_sizing:
+  enabled: false
+  max_multiple: 1.5      # never more than 1.5x the staged fixed-dollar risk
+  max_risk_usd: 5.0      # ...and never more than this many dollars, ever

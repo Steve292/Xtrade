@@ -118,3 +118,114 @@ def _run_all():
 
 if __name__ == "__main__":
     sys.exit(1 if _run_all() else 0)
+
+
+# --- extended detectors -----------------------------------------------------
+# bot/smc/{breaker,mitigation,candles,volume_profile}.py refine confidence
+# AFTER the confluence gate has already decided a setup exists. The two
+# properties below are the safety contract for that.
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+
+def _walk(seed: int, n: int = 220):
+    rng = np.random.default_rng(seed)
+    price, rows = 100.0, []
+    for _ in range(n):
+        o = price
+        c = price + rng.normal(0, 1.2)
+        h = max(o, c) + abs(rng.normal(0, 0.7))
+        l = min(o, c) - abs(rng.normal(0, 0.7))
+        rows.append([o, h, l, c, abs(rng.normal(500, 150))])
+        price = c
+    return pd.DataFrame(rows, columns=["open", "high", "low", "close", "volume"])
+
+
+def test_extended_detectors_are_off_by_default():
+    assert SMCStrategy().extended_detectors is False
+
+
+def test_extended_detectors_never_change_entry_stop_or_direction():
+    """They refine CONFIDENCE only. If they could move the entry or the stop
+    they would be changing the trade, not scoring it."""
+    for seed in range(40):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        off = SMCStrategy().analyze(df, htf)
+        on = SMCStrategy(extended_detectors=True).analyze(df, htf)
+        assert off.type == on.type
+        assert off.entry == on.entry
+        assert off.stop_loss == on.stop_loss
+        assert off.take_profit == on.take_profit
+
+
+def test_extended_detectors_cannot_manufacture_a_signal():
+    """A setup the confluence gate rejected must stay rejected. The refinement
+    happens after the gate precisely so a new detector can never push a
+    sub-threshold setup over the entry bar."""
+    for seed in range(60):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        off = SMCStrategy().analyze(df, htf)
+        on = SMCStrategy(extended_detectors=True).analyze(df, htf)
+        if off.type is SignalType.NONE:
+            assert on.type is SignalType.NONE
+
+
+def test_confidence_adjustment_respects_its_bound():
+    for cap in (0.0, 0.05, 0.10, 0.25):
+        for seed in range(30):
+            df, htf = _walk(seed), _walk(seed + 9000, 120)
+            off = SMCStrategy().analyze(df, htf)
+            on = SMCStrategy(extended_detectors=True, extended_max_adjust=cap).analyze(df, htf)
+            if off.type is SignalType.NONE:
+                continue
+            assert abs(on.confidence - off.confidence) <= cap + 1e-9
+
+
+def test_confidence_stays_within_zero_to_one():
+    for seed in range(40):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        on = SMCStrategy(extended_detectors=True, extended_max_adjust=0.5).analyze(df, htf)
+        assert 0.0 <= on.confidence <= 1.0
+
+
+def test_adjustment_moves_in_both_directions_across_a_sample():
+    """A refinement that only ever raises confidence is a bias, not a signal —
+    and raising it is the direction that increases unattended auto-fire."""
+    ups = downs = 0
+    for seed in range(120):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        off = SMCStrategy().analyze(df, htf)
+        if off.type is SignalType.NONE:
+            continue
+        on = SMCStrategy(extended_detectors=True).analyze(df, htf)
+        delta = on.confidence - off.confidence
+        if delta > 0:
+            ups += 1
+        elif delta < 0:
+            downs += 1
+    assert ups > 0 and downs > 0, f"adjustment was one-directional (up={ups}, down={downs})"
+
+
+# --- detector reporting -----------------------------------------------------
+
+
+def test_signals_report_the_detectors_that_produced_them():
+    """Signal.detectors is the join key bot/knowledge.py scores against — it
+    must carry the same dotted module names the corpus's `maps_to` uses."""
+    found = False
+    for seed in range(60):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        sig = SMCStrategy().analyze(df, htf)
+        if sig.type is SignalType.NONE:
+            continue
+        found = True
+        assert sig.detectors, "a real setup reported no detectors"
+        assert all(d.startswith("bot.") for d in sig.detectors)
+        assert len(set(sig.detectors)) == len(sig.detectors), "duplicate detectors"
+    assert found, "sample produced no signals — detector reporting went untested"
+
+
+def test_no_signal_reports_no_detectors():
+    empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    assert SMCStrategy().analyze(empty).detectors == ()

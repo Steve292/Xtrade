@@ -14,13 +14,16 @@ class OrderBlock:
     mitigated: bool = False
 
 
-def detect_order_blocks(
-    df: pd.DataFrame, lookback: int = 20, impulse_threshold: float = 0.005
+def detect_raw_order_blocks(
+    df: pd.DataFrame, impulse_threshold: float = 0.005
 ) -> list[OrderBlock]:
-    """
-    Detect order blocks: last opposing candle before a strong impulsive move.
-    Bullish OB = last bearish candle before bullish impulse.
-    Bearish OB = last bullish candle before bearish impulse.
+    """Every order block in the frame, before the recency window and the
+    mitigation filter are applied.
+
+    Split out of detect_order_blocks() so bot/smc/breaker.py can reach the
+    blocks that were BROKEN — the ones detect_order_blocks() deliberately
+    drops, and exactly the ones a breaker block is made of. Behaviour of
+    detect_order_blocks() is unchanged.
     """
     blocks: list[OrderBlock] = []
     opens = df["open"].values
@@ -52,6 +55,18 @@ def detect_order_blocks(
                 )
             )
 
+    return blocks
+
+
+def detect_order_blocks(
+    df: pd.DataFrame, lookback: int = 20, impulse_threshold: float = 0.005
+) -> list[OrderBlock]:
+    """
+    Detect order blocks: last opposing candle before a strong impulsive move.
+    Bullish OB = last bearish candle before bullish impulse.
+    Bearish OB = last bullish candle before bearish impulse.
+    """
+    blocks = detect_raw_order_blocks(df, impulse_threshold)
     # Keep only recent, unmitigated blocks
     recent = blocks[-lookback:]
     return _mark_mitigated(df, recent)

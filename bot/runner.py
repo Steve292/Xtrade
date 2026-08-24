@@ -19,7 +19,18 @@ from bot.mt5.broker import MT5Broker
 from bot.mt5.client import MT5Client
 from bot.mt5.metaapi_client import MetaApiClient
 from bot import pending_trades
-from bot.position_sizing import risk_pct_for_fixed_usd, staged_fixed_risk_usd
+from bot.position_sizing import (
+    SizingFactors,
+    apply_risk_ceiling,
+    atr,
+    confidence_multiplier,
+    final_risk_pct,
+    regime_alloc_weight,
+    risk_pct_for_fixed_usd,
+    staged_fixed_risk_usd,
+    volatility_adjust,
+)
+from bot import knowledge as knowledge_mod
 from bot.risk import calc_lot_size, calc_position_size
 from bot.screening import ScreenConfig, TradeScreener
 from bot.smc.strategy import SMCStrategy, SignalType
@@ -58,6 +69,8 @@ def run_bot(config_path: str = "config.yaml") -> None:
         liquidity_tolerance_pct=config.get("liquidity_tolerance_pct", 0.0005),
         reward_risk_ratio=config.get("reward_risk_ratio", 2.0),
         stop_loss_pct=config.get("stop_loss_pct"),
+        extended_detectors=config.get("smc", {}).get("extended_detectors", False),
+        extended_max_adjust=config.get("smc", {}).get("extended_max_adjust", 0.10),
     )
     # Same seven-gate screen the Hyperliquid path (hypertrade.py) has always
     # required — this loop previously entered on the raw SMC signal alone
@@ -79,6 +92,23 @@ def run_bot(config_path: str = "config.yaml") -> None:
     # combined balance below, not applied here since that balance isn't
     # known yet at startup.
     fixed_risk_cfg = config.get("fixed_risk_usd", {})
+    # Adaptive sizing (bot/position_sizing.py's multiplier chain) and the
+    # knowledge confluence layer. Both OFF unless config.yaml turns them on;
+    # with both off this loop behaves exactly as it did before they existed.
+    sizing_cfg = config.get("position_sizing", {})
+    knowledge_cfg = config.get("knowledge", {})
+    knowledge_index = knowledge_mod.KnowledgeIndex()
+    if knowledge_cfg.get("enabled"):
+        knowledge_index = knowledge_mod.build_index(
+            knowledge_cfg.get("corpus_path", knowledge_mod.DEFAULT_CORPUS_PATH),
+            knowledge_cfg.get("cache_path", knowledge_mod.DEFAULT_CACHE_PATH),
+        )
+        if knowledge_index.available:
+            print(f"  Knowledge: {len(knowledge_index.weights)} modules weighted "
+                  f"from {knowledge_index.document_count} documents")
+        else:
+            print("  Knowledge: ENABLED but no usable corpus found — "
+                  "scoring will be skipped (no adjustment applied)")
 
     evm_dex: EVMDex | None = None
     # One entry per scanned symbol: its data source, executor, and (mt5 only)
@@ -216,9 +246,20 @@ def run_bot(config_path: str = "config.yaml") -> None:
                 sm_direction = _snapshot["smart_money"]["direction"]
                 sm_bullish = _snapshot["smart_money"]["bullish_count"]
                 sm_bearish = _snapshot["smart_money"]["bearish_count"]
+                # Same snapshot already carries the regime label and hotness
+                # multiplier adaptive sizing needs — reuse it rather than
+                # recompute, which would double this pass's API calls against
+                # free tiers the snapshot cache exists to protect.
+                regime_label = _snapshot["regime"]["label"]
+                hotness_mult = float(_snapshot["hotness"]["multiplier"])
             except Exception as e:
                 print(f"  [smart money] snapshot unavailable this pass ({type(e).__name__}) — treating as NEUTRAL")
                 sm_direction, sm_bullish, sm_bearish = "NEUTRAL", 0, 0
+                # NEUTRAL/1.0 = "no opinion": regime_alloc_weight("NEUTRAL")
+                # is 1.0, so a failed snapshot leaves adaptive sizing resting
+                # on volatility and confidence alone rather than silently
+                # sizing off a stale or fabricated regime.
+                regime_label, hotness_mult = "NEUTRAL", 1.0
 
             # risk_usd is None unless fixed_risk_usd is enabled AND this pass's
             # combined-balance fetch succeeds — None means "use the configured
@@ -285,8 +326,17 @@ def run_bot(config_path: str = "config.yaml") -> None:
 
                     signal = strategy.analyze(df, htf_df)
                     screen_result = screener.screen(signal, df, htf_df) if signal.type != SignalType.NONE else None
+                    knowledge_result = (
+                        knowledge_mod.score_signal(signal.detectors, knowledge_index)
+                        if signal.type != SignalType.NONE and knowledge_index.available
+                        else None
+                    )
                     unified = (
-                        evaluate_unified(signal, screen_result, sm_direction, sm_bullish, sm_bearish)
+                        evaluate_unified(
+                            signal, screen_result, sm_direction, sm_bullish, sm_bearish,
+                            knowledge_result=knowledge_result,
+                            knowledge_max_adjust_pct=knowledge_cfg.get("max_adjust_pct", 5.0),
+                        )
                         if signal.type != SignalType.NONE
                         else None
                     )
@@ -315,6 +365,62 @@ def run_bot(config_path: str = "config.yaml") -> None:
                             effective_risk_pct = risk_pct_for_fixed_usd(risk_usd, symbol_balance_usd)
                         else:
                             effective_risk_pct = risk_pct
+
+                        # Adaptive sizing. The multipliers modulate the risk
+                        # already decided above; they do NOT substitute a
+                        # base_risk_pct from position_sizing.BASE_RISK_PCT.
+                        # That table has no forex bucket at all (see
+                        # market_snapshot._analyze_mt5_symbol, which documents
+                        # the gap and declines to invent a number), and four of
+                        # the seven watchlist symbols are forex pairs. Treating
+                        # the staged fixed-dollar risk as the base keeps the
+                        # user's own staged rule as the anchor and sidesteps
+                        # the missing bucket entirely.
+                        if sizing_cfg.get("enabled") and effective_risk_pct > 0:
+                            sized_balance = (
+                                balance / cent_divisor if broker is not None else balance
+                            )
+                            vol_adjust = 1.0
+                            if len(df) > 100:
+                                atr20 = atr(df, period=20).dropna()
+                                atr100 = atr(df, period=100).dropna()
+                                if len(atr20) and len(atr100):
+                                    vol_adjust = volatility_adjust(
+                                        float(atr20.iloc[-1]), float(atr100.mean())
+                                    )
+                            factors = SizingFactors(
+                                base_risk_pct=effective_risk_pct,
+                                regime_alloc_weight=regime_alloc_weight(regime_label),
+                                hotness_multiplier=hotness_mult,
+                                volatility_adjust=vol_adjust,
+                                confidence_multiplier=confidence_multiplier(signal.confidence),
+                            )
+                            adapted_pct = final_risk_pct(factors)
+
+                            # Absolute dollar ceiling. final_risk_pct's own 3x
+                            # clamp is RELATIVE and cannot express "never risk
+                            # more than N dollars" — at a $6 balance a 3x stack
+                            # on $3 staged risk authorises more than the whole
+                            # account. See position_sizing.apply_risk_ceiling.
+                            base_usd = effective_risk_pct / 100 * sized_balance
+                            ceiling_usd = min(
+                                base_usd * float(sizing_cfg.get("max_multiple", 1.5)),
+                                float(sizing_cfg.get("max_risk_usd", 5.0)),
+                            )
+                            capped_pct = apply_risk_ceiling(
+                                adapted_pct, sized_balance, ceiling_usd
+                            )
+                            print(
+                                f"  [sizing] {sym} base {effective_risk_pct:.2f}% "
+                                f"(${base_usd:.2f}) -> adapted {adapted_pct:.2f}% "
+                                f"-> capped {capped_pct:.2f}% "
+                                f"(${capped_pct / 100 * sized_balance:.2f}, "
+                                f"ceiling ${ceiling_usd:.2f}) "
+                                f"[regime {regime_label} x{regime_alloc_weight(regime_label):.2f}, "
+                                f"hot x{hotness_mult:.2f}, vol x{vol_adjust:.2f}, "
+                                f"conf x{confidence_multiplier(signal.confidence):.2f}]"
+                            )
+                            effective_risk_pct = capped_pct
 
                         if broker is not None:
                             size = calc_lot_size(

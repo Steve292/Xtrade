@@ -35,3 +35,14 @@ bugreport-sdk_gphone64_arm64-*.zip
 msedgewebview2.dxvk-cache
 settings.dat
 pending_trades.json
+
+# Knowledge confluence runtime artifacts (bot/knowledge.py)
+# The corpus itself lives outside the repo and is reached through a symlink
+# that is intentionally not tracked; the weights file is a derived cache.
+knowledge
+knowledge_candidates.json
+knowledge_channels.json
+.knowledge_weights.json
+
+# Local dev virtualenv used for running the test suite
+.devvenv/

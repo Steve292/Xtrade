@@ -54,6 +54,19 @@ class UnifiedResult:
     smart_money_direction: str
     smart_money_agreement_count: int
     reason: str
+    # Knowledge confluence (bot/knowledge.py). Defaulted so every existing
+    # construction and every caller that never passes a knowledge result is
+    # unaffected. knowledge_pct is the raw corpus score; knowledge_adjust is
+    # what was actually applied to final_pct after clamping.
+    knowledge_pct: float = 0.0
+    knowledge_adjust: float = 0.0
+    knowledge_reason: str = ""
+
+
+DEFAULT_KNOWLEDGE_MAX_ADJUST_PCT = 5.0
+# final_pct midpoint the knowledge score is measured against: above it the
+# corpus agrees more than average and nudges up, below it, down.
+_KNOWLEDGE_NEUTRAL_PCT = 50.0
 
 
 def evaluate_unified(
@@ -62,7 +75,28 @@ def evaluate_unified(
     smart_money_direction: str,
     smart_money_bullish_count: int,
     smart_money_bearish_count: int,
+    knowledge_result=None,
+    knowledge_max_adjust_pct: float = DEFAULT_KNOWLEDGE_MAX_ADJUST_PCT,
 ) -> UnifiedResult:
+    """Adding `knowledge_result` (a bot.knowledge.KnowledgeResult) layers the
+    ingested corpus on as a THIRD, advisory-only input. Omitting it — which
+    every caller does until the config flag is on — reproduces this function's
+    previous output exactly.
+
+    Two properties this function must keep, both load-bearing:
+
+    1. `approved` NEVER depends on knowledge. It stays `structure_ok and
+       smart_money_ok`. The corpus is unvetted third-party commentary; it does
+       not get a vote on whether real money moves.
+
+    2. The knowledge contribution is a BOUNDED adjustment to final_pct, not a
+       third term in the average. A three-way mean would let the corpus swing
+       final_pct by up to ~33 points, and final_pct is exactly what
+       bot/runner.py compares against auto_fire_pct to decide whether a trade
+       fires with no human in the loop. Averaging it in would have handed an
+       unvetted transcript corpus a 33-point lever over unattended execution.
+       It gets `knowledge_max_adjust_pct` points, symmetric either way.
+    """
     structure_ok = screen_result.approved
 
     if signal.type == SignalType.LONG:
@@ -77,6 +111,23 @@ def evaluate_unified(
 
     smart_money_agreement_pct = (agreement_count / _TOTAL_SMART_MONEY_MODULES) * 100
     final_pct = (signal.confidence * 100 + smart_money_agreement_pct) / 2
+
+    # Advisory knowledge layer. `available=False` means "no opinion" (missing
+    # or unreadable corpus) and must apply NO adjustment — treating it as a
+    # 0% score would quietly penalise every setup the moment the corpus file
+    # went missing, which is a failure mode that would look exactly like the
+    # strategy getting worse.
+    knowledge_pct = 0.0
+    knowledge_adjust = 0.0
+    knowledge_reason = ""
+    if knowledge_result is not None and getattr(knowledge_result, "available", False):
+        knowledge_pct = float(knowledge_result.knowledge_pct)
+        knowledge_reason = knowledge_result.reason
+        cap = max(0.0, float(knowledge_max_adjust_pct))
+        raw = ((knowledge_pct - _KNOWLEDGE_NEUTRAL_PCT) / _KNOWLEDGE_NEUTRAL_PCT) * cap
+        knowledge_adjust = max(-cap, min(cap, raw))
+        final_pct = max(0.0, min(100.0, final_pct + knowledge_adjust))
+
     approved = structure_ok and smart_money_ok
 
     if not structure_ok:
@@ -94,4 +145,7 @@ def evaluate_unified(
         smart_money_direction=smart_money_direction,
         smart_money_agreement_count=agreement_count,
         reason=reason,
+        knowledge_pct=knowledge_pct,
+        knowledge_adjust=knowledge_adjust,
+        knowledge_reason=knowledge_reason,
     )

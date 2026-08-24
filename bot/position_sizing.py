@@ -166,3 +166,57 @@ def check_volume_exhaustion(breakout_volume: float, current_30m_volume: float) -
     if change_pct >= 50:
         return VolumeExhaustionCheck("CANCEL_TPS_TRAIL_FULL")
     return VolumeExhaustionCheck("HOLD")
+
+
+# --- Live-path helpers -------------------------------------------------------
+# The blueprint specifies the multiplier chain above but says nothing about how
+# a confidence score becomes a multiplier, nor about any absolute cap. Both are
+# needed before this module can touch a real order, so both are defined here,
+# documented as this project's own interpretation in the same spirit as
+# _REGIME_ALLOC_WEIGHT.
+
+# Confidence at or below this scales size to MIN_CONFIDENCE_MULTIPLIER; at 1.0
+# it reaches MAX_CONFIDENCE_MULTIPLIER, linearly in between. The floor is set
+# at the screening gate's own default min_confidence: a setup weaker than the
+# screener would even look at should never be sized up.
+CONFIDENCE_FLOOR = 0.55
+MIN_CONFIDENCE_MULTIPLIER = 0.5
+MAX_CONFIDENCE_MULTIPLIER = 1.5
+
+
+def confidence_multiplier(confidence: float) -> float:
+    """Maps an SMC confidence in [0, 1] to a sizing multiplier.
+
+    Linear from MIN_CONFIDENCE_MULTIPLIER at CONFIDENCE_FLOOR to
+    MAX_CONFIDENCE_MULTIPLIER at 1.0, clamped outside that band.
+    """
+    if confidence <= CONFIDENCE_FLOOR:
+        return MIN_CONFIDENCE_MULTIPLIER
+    span = 1.0 - CONFIDENCE_FLOOR
+    if span <= 0:
+        return MAX_CONFIDENCE_MULTIPLIER
+    ratio = (confidence - CONFIDENCE_FLOOR) / span
+    return MIN_CONFIDENCE_MULTIPLIER + ratio * (
+        MAX_CONFIDENCE_MULTIPLIER - MIN_CONFIDENCE_MULTIPLIER
+    )
+
+
+def apply_risk_ceiling(risk_pct: float, balance: float, ceiling_usd: float) -> float:
+    """Clamp a risk percentage so the DOLLAR risk it implies can't exceed
+    `ceiling_usd`.
+
+    This is the control that actually matters on a small account, and it is
+    why final_risk_pct()'s MAX_COMBINED_MULTIPLIER is not sufficient on its
+    own. That clamp is relative: it caps the multiplier stack at 3x whatever
+    the base risk was. Against a staged $3 fixed risk that authorises $9 of
+    risk — which on a $6 balance is more than the entire account. A relative
+    cap cannot express "never risk more than N dollars"; only an absolute one
+    can, so both are applied.
+
+    A non-positive balance or ceiling returns 0.0 (skip sizing), matching
+    risk_pct_for_fixed_usd()'s own handling rather than inventing a size.
+    """
+    if balance <= 0 or ceiling_usd <= 0 or risk_pct <= 0:
+        return 0.0
+    max_pct = ceiling_usd / balance * 100
+    return min(risk_pct, max_pct)

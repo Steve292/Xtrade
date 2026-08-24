@@ -221,3 +221,101 @@ def _run_all():
 
 if __name__ == "__main__":
     sys.exit(1 if _run_all() else 0)
+
+
+# --- live-path helpers: confidence multiplier and the absolute dollar ceiling
+# These are what stand between the multiplier chain above and a real order.
+# The ceiling tests below use this account's ACTUAL balance ($6.12 at the time
+# of writing) rather than a round number, because that is the regime where a
+# relative-only cap fails.
+
+from bot.position_sizing import (  # noqa: E402
+    CONFIDENCE_FLOOR,
+    MAX_COMBINED_MULTIPLIER,
+    MAX_CONFIDENCE_MULTIPLIER,
+    MIN_CONFIDENCE_MULTIPLIER,
+    apply_risk_ceiling,
+    confidence_multiplier,
+)
+
+LIVE_BALANCE = 6.12
+STAGED_RISK_USD = 3.0
+
+
+def test_confidence_multiplier_spans_its_documented_band():
+    assert confidence_multiplier(0.0) == MIN_CONFIDENCE_MULTIPLIER
+    assert confidence_multiplier(CONFIDENCE_FLOOR) == MIN_CONFIDENCE_MULTIPLIER
+    assert confidence_multiplier(1.0) == MAX_CONFIDENCE_MULTIPLIER
+    assert MIN_CONFIDENCE_MULTIPLIER < confidence_multiplier(0.8) < MAX_CONFIDENCE_MULTIPLIER
+
+
+def test_confidence_multiplier_is_monotonic():
+    values = [confidence_multiplier(c / 20) for c in range(21)]
+    assert values == sorted(values)
+
+
+def test_ceiling_clamps_risk_that_exceeds_the_dollar_cap():
+    # 100% risk on a $6.12 balance is $6.12; a $4.50 ceiling must cut it.
+    capped = apply_risk_ceiling(100.0, LIVE_BALANCE, 4.50)
+    assert capped < 100.0
+    assert abs(capped / 100 * LIVE_BALANCE - 4.50) < 1e-9
+
+
+def test_ceiling_leaves_risk_below_the_cap_untouched():
+    assert apply_risk_ceiling(10.0, LIVE_BALANCE, 4.50) == 10.0
+
+
+def test_relative_clamp_alone_would_exceed_the_account_but_the_ceiling_does_not():
+    """The reason both caps exist.
+
+    MAX_COMBINED_MULTIPLIER is RELATIVE: against the staged $3 risk it
+    authorises $9, which on a $6.12 balance is more than the whole account.
+    Only the absolute ceiling can express "never risk more than N dollars".
+    """
+    staged_pct = STAGED_RISK_USD / LIVE_BALANCE * 100
+    unbounded = final_risk_pct(SizingFactors(
+        base_risk_pct=staged_pct,
+        regime_alloc_weight=1.2, hotness_multiplier=2.5,
+        volatility_adjust=2.0, confidence_multiplier=1.5,
+    ))
+    assert unbounded / 100 * LIVE_BALANCE > LIVE_BALANCE, (
+        "sanity: the relative clamp alone should authorise more than the balance"
+    )
+
+    ceiling = min(STAGED_RISK_USD * 1.5, 5.0)
+    capped = apply_risk_ceiling(unbounded, LIVE_BALANCE, ceiling)
+    assert capped / 100 * LIVE_BALANCE <= ceiling + 1e-9
+    assert capped / 100 * LIVE_BALANCE < LIVE_BALANCE
+
+
+def test_no_multiplier_stack_can_breach_the_ceiling():
+    """Exhaustive over the multiplier ranges the modules can actually emit."""
+    ceiling = min(STAGED_RISK_USD * 1.5, 5.0)
+    staged_pct = STAGED_RISK_USD / LIVE_BALANCE * 100
+    for regime in (0.0, 0.6, 1.0, 1.2):
+        for hot in (0.5, 1.0, 1.5, 2.5):
+            for vol in (0.3, 1.0, 2.0):
+                for conf in (MIN_CONFIDENCE_MULTIPLIER, 1.0, MAX_CONFIDENCE_MULTIPLIER):
+                    pct = final_risk_pct(SizingFactors(
+                        base_risk_pct=staged_pct, regime_alloc_weight=regime,
+                        hotness_multiplier=hot, volatility_adjust=vol,
+                        confidence_multiplier=conf,
+                    ))
+                    capped = apply_risk_ceiling(pct, LIVE_BALANCE, ceiling)
+                    assert capped / 100 * LIVE_BALANCE <= ceiling + 1e-9
+
+
+def test_risk_off_regime_sizes_to_zero():
+    """RISK_OFF maps to weight 0.0 — a full stop, not a small position."""
+    pct = final_risk_pct(SizingFactors(
+        base_risk_pct=50.0, regime_alloc_weight=regime_alloc_weight("RISK_OFF"),
+        hotness_multiplier=2.5, volatility_adjust=2.0, confidence_multiplier=1.5,
+    ))
+    assert pct == 0.0
+
+
+def test_ceiling_skips_sizing_on_degenerate_inputs():
+    assert apply_risk_ceiling(50.0, 0.0, 4.5) == 0.0      # no balance
+    assert apply_risk_ceiling(50.0, -1.0, 4.5) == 0.0     # negative balance
+    assert apply_risk_ceiling(50.0, LIVE_BALANCE, 0.0) == 0.0   # no ceiling
+    assert apply_risk_ceiling(0.0, LIVE_BALANCE, 4.5) == 0.0    # no risk
