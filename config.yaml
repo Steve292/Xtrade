@@ -1,6 +1,11 @@
 symbol: BTC/USDT
 timeframe: 15m
-higher_timeframe: 1h
+# Higher-timeframe bias, raised 1h -> 4h at explicit user request: scan gold
+# and BTC for HIGH-timeframe trades, entered on the low timeframe. The 4h read
+# sets direction (SMCStrategy's htf_trend, and screening.py's top-down
+# alignment gate); mt5_timeframe below stays the entry timeframe. 1d is the
+# next step up if setups should be rarer and larger still.
+higher_timeframe: 4h
 
 # Venue: cex (Binance via CCXT) | evm (on-chain DEX) | mt5 (MetaTrader 5 bridge)
 venue: mt5
@@ -67,7 +72,12 @@ mt5_cent_account: true
 # US30 (and every other index CFD) is NOT available on Exness Cent accounts —
 # checked directly against the account's symbol universe, not just Market
 # Watch — so it's left out; it needs a Standard/Zero/Pro account type instead.
-mt5_watchlist: [EURUSDc, USDJPYc, GBPUSDc, GBPJPYc, XAUUSDc, BTCUSDc, ETHUSDc]
+# Narrowed to gold and BTC at explicit user request. The four forex pairs and
+# ETH are dropped, not deleted — the previous list was:
+#   [EURUSDc, USDJPYc, GBPUSDc, GBPJPYc, XAUUSDc, BTCUSDc, ETHUSDc]
+# Paired with higher_timeframe: 4h above, this is the HTF-bias / LTF-entry
+# scan: 4h sets direction, mt5_timeframe (15m) times the entry.
+mt5_watchlist: [XAUUSDc, BTCUSDc]
 
 # Backtest defaults
 backtest_bars: 2000
@@ -130,7 +140,7 @@ capital_guard:
 # final_pct and final_pct decides unattended auto-fire.
 # OFF: analyze() returns bit-identical signals to before these existed.
 smc:
-  extended_detectors: false
+  extended_detectors: true
   extended_max_adjust: 0.10
 
 # --- Knowledge confluence (bot/knowledge.py)
@@ -144,7 +154,7 @@ smc:
 # absolute path for any checkout that lacks it.
 # OFF: final_pct is computed exactly as before.
 knowledge:
-  enabled: false
+  enabled: true
   corpus_path: knowledge/corpus.json
   cache_path: .knowledge_weights.json
   max_adjust_pct: 5.0
@@ -163,6 +173,6 @@ knowledge:
 #     the ones that actually bound the downside on a small balance.
 # OFF: effective_risk_pct is exactly risk_pct_for_fixed_usd()'s result.
 position_sizing:
-  enabled: false
+  enabled: true
   max_multiple: 1.5      # never more than 1.5x the staged fixed-dollar risk
   max_risk_usd: 5.0      # ...and never more than this many dollars, ever

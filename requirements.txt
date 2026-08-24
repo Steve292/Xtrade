@@ -5,6 +5,15 @@ pyyaml>=6.0.1
 python-dotenv>=1.0.0
 web3>=6.15.0
 requests>=2.31.0
+# urllib3 v2 requires OpenSSL 1.1.1+, but this machine's Python 3.9 links
+# LibreSSL 2.8.3 (macOS CommandLineTools). That mismatch surfaced as
+# intermittent "Hyperliquid unavailable at startup (SSLError)" in
+# logs/mt5-autotrader.log, which silently dropped that venue out of the
+# combined ledger and left the capital guard running on MT5 balance alone.
+# Pinned below 2 so HTTPS goes through urllib3 1.x, which supports LibreSSL.
+# (pip flags a conflict with types-requests, which wants urllib3>=2 — that
+# package is type stubs only and is never imported at runtime.)
+urllib3<2
 
 # MT5 venue (optional — only needed for venue: mt5).
 # mt5_backend: bridge — client side only; MetaTrader5 itself runs on a remote
