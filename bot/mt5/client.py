@@ -255,9 +255,33 @@ class MT5Client:
                 "price": float(d.price),
                 "time": int(d.time),
                 "ticket": int(d.ticket),
+                # position_id ties a closing deal back to the POSITION it
+                # closed. The deal's own ticket is a different number, so
+                # matching on that never finds the position -- which is what
+                # bot/trade_grades.py needs to attribute realised P&L to the
+                # detectors that opened it. magic identifies who placed it.
+                "position_id": int(getattr(d, "position_id", 0) or 0),
+                "magic": int(getattr(d, "magic", 0) or 0),
             })
         out.sort(key=lambda d: d["time"], reverse=True)
         return out
+
+    def realized_pnl_for_position(self, position_id: int, days: int = 7) -> float | None:
+        """Realised P&L of the closing deal(s) for one position, or None if
+        no closing deal is found.
+
+        None means "unknown", NOT zero: recording a real trade's outcome as
+        break-even because the lookup missed would quietly corrupt any grade
+        computed from it.
+        """
+        try:
+            deals = self.closed_deals(days=days)
+        except Exception:
+            return None
+        matched = [d for d in deals if d.get("position_id") == int(position_id)]
+        if not matched:
+            return None
+        return float(sum(d["profit"] for d in matched))
 
     def close_position(self, position):
         """Close an open MT5 position by sending the opposite market deal."""

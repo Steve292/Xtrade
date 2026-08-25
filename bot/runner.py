@@ -99,6 +99,12 @@ def run_bot(config_path: str = "config.yaml") -> None:
     # Whether positions this bot did NOT place (manual trades, another EA, a
     # copy-trade feed) constrain it. See the main loop for what it enforces.
     respect_manual = config.get("respect_manual_positions", True)
+    # Realised-outcome store (bot/trade_grades.py). Set trade_grades: false to
+    # stop recording entirely.
+    grades_path = (
+        config.get("trade_grades_path", "trade_grades.json")
+        if config.get("trade_grades", True) else None
+    )
     knowledge_cfg = config.get("knowledge", {})
     knowledge_index = knowledge_mod.KnowledgeIndex()
     if knowledge_cfg.get("enabled"):
@@ -159,6 +165,9 @@ def run_bot(config_path: str = "config.yaml") -> None:
             sym_broker = MT5Broker(
                 client, symbol=sym, mode=mode,
                 initial_balance=initial_balance, cent_divisor=cent_divisor,
+                # The live loop is the ONLY caller that records grades; tests
+                # and ad-hoc brokers pass nothing and write nowhere.
+                grades_path=grades_path,
             )
             watchlist.append(
                 {"symbol": sym, "data": sym_broker, "executor": sym_broker, "broker": sym_broker}
@@ -548,6 +557,12 @@ def run_bot(config_path: str = "config.yaml") -> None:
                                     tp=signal.take_profit,
                                     reason=signal.reason,
                                     symbol=sym,
+                                    # Carried so the exit can attribute the
+                                    # realised outcome back to the detectors
+                                    # that produced the setup — the only way
+                                    # the corpus's popularity weights ever
+                                    # become performance ones.
+                                    detectors=signal.detectors,
                                 )
                             # Explicit, unambiguous marker for a real fire — a dedicated,
                             # greppable line rather than folding it into the Confidence

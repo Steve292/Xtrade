@@ -33,6 +33,9 @@ class MT5Position:
     tick_size: float
     tick_value: float
     ticket: int | None = None
+    # Detector modules that produced this setup, carried from Signal.detectors
+    # so the exit can attribute its outcome back to them (bot/trade_grades.py).
+    detectors: tuple = ()
 
 
 class MT5Broker:
@@ -43,6 +46,7 @@ class MT5Broker:
         mode: str = "paper",
         initial_balance: float = 10000.0,
         cent_divisor: float = 1.0,
+        grades_path=None,
     ):
         self.client = client
         self.symbol = symbol
@@ -51,6 +55,13 @@ class MT5Broker:
         self.cent_divisor = cent_divisor
         self.position: MT5Position | None = None
         self.trade_log: list[dict] = []
+        # Where realised outcomes are recorded for grading (bot/trade_grades.py).
+        # None = record nothing. Deliberately opt-in and injected rather than
+        # defaulting to a module-level path: with an implicit default, every
+        # test that exercises this broker in paper mode writes fixture trades
+        # into the live grading store, and the dataset the grades are computed
+        # from silently fills with EURUSD trades that never happened.
+        self.grades_path = grades_path
 
     # --- data ------------------------------------------------------------
 
@@ -86,6 +97,7 @@ class MT5Broker:
         tp: float,
         reason: str,
         symbol: str,
+        detectors: tuple = (),
     ) -> None:
         if self.position is not None:
             return
@@ -102,6 +114,7 @@ class MT5Broker:
                 reason=reason,
                 tick_size=info.tick_size,
                 tick_value=info.tick_value,
+                detectors=tuple(detectors or ()),
             )
             self.trade_log.append(
                 {"action": "open", "side": side, "entry": entry, "lots": size,
@@ -109,6 +122,7 @@ class MT5Broker:
             )
             print(f"[MT5 PAPER] OPEN {side.upper()} {size:g} lots {symbol} @ {entry:.5f}")
             print(f"            SL={sl:.5f} TP={tp:.5f} | {reason}")
+            self._grade_entry(symbol, side, entry, sl, tp)
             return
 
         result = self.client.market_order(symbol, side, size, sl, tp, comment=reason)
@@ -125,6 +139,7 @@ class MT5Broker:
             tick_size=info.tick_size,
             tick_value=info.tick_value,
             ticket=getattr(result, "order", None),
+            detectors=tuple(detectors or ()),
         )
         self.trade_log.append(
             {"action": "open", "side": side, "entry": entry, "lots": size,
@@ -132,6 +147,41 @@ class MT5Broker:
         )
         print(f"[MT5 LIVE] OPEN {side.upper()} {size:g} lots {symbol} "
               f"ticket={self.position.ticket} | {reason}")
+        self._grade_entry(symbol, side, entry, sl, tp)
+
+    def _grade_id(self) -> str:
+        """Stable id for the open position: its ticket in live mode, or a
+        symbol+entry key in paper mode where no ticket exists."""
+        pos = self.position
+        if pos is None:
+            return ""
+        return str(pos.ticket) if pos.ticket else f"{self.symbol}:{pos.entry}"
+
+    def _grade_entry(self, symbol, side, entry, sl, tp) -> None:
+        """Open a grading record. Wrapped because a failure to RECORD a trade
+        must never prevent or unwind the trade itself -- this is observation."""
+        if self.grades_path is None:
+            return
+        try:
+            from bot.trade_grades import GradeBook
+            book = GradeBook.load(self.grades_path)
+            book.record_entry(
+                self._grade_id(), symbol, side,
+                getattr(self.position, "detectors", ()),
+                entry, sl, tp,
+            )
+        except Exception as e:
+            print(f"[grades] entry not recorded ({type(e).__name__}) — trade unaffected")
+
+    def _grade_exit(self, pnl: float) -> None:
+        if self.grades_path is None:
+            return
+        try:
+            from bot.trade_grades import GradeBook
+            book = GradeBook.load(self.grades_path)
+            book.record_exit(self._grade_id(), pnl)
+        except Exception as e:
+            print(f"[grades] exit not recorded ({type(e).__name__}) — trade unaffected")
 
     def check_exit(self, current_price: float) -> bool:
         if self.position is None:
@@ -162,6 +212,7 @@ class MT5Broker:
         )
         print(f"[MT5 PAPER] CLOSE {pos.side.upper()} @ {current_price:.5f} | "
               f"{outcome} | PnL=${pnl:+.2f} | Balance=${self.balance:.2f}")
+        self._grade_exit(pnl)
         self.position = None
         return True
 
@@ -187,9 +238,21 @@ class MT5Broker:
         if still_open is not None:
             return False
         balance = self.client.account_balance()
+        # Realised P&L for THIS position, matched on position_id. None means
+        # the closing deal could not be found -- the trade is then left
+        # ungraded rather than recorded as break-even, which would look like
+        # a real flat outcome and skew every grade drawn from it.
+        pnl = None
+        if ticket is not None:
+            pnl = self.client.realized_pnl_for_position(ticket)
+        if pnl is None:
+            print(f"[grades] no closing deal found for ticket={ticket} — "
+                  f"trade left ungraded rather than recorded as flat")
+        else:
+            self._grade_exit(pnl)
         self.trade_log.append(
             {"action": "close", "side": self.position.side,
-             "ticket": self.position.ticket, "balance": balance}
+             "ticket": self.position.ticket, "balance": balance, "pnl": pnl}
         )
         print(f"[MT5 LIVE] CLOSE {self.position.side.upper()} "
               f"ticket={self.position.ticket} | "

@@ -195,3 +195,17 @@ position_sizing:
 # positions -- it will not touch, modify, or close a manual trade.
 # false: the bot ignores them entirely and can stack on top of your trades.
 respect_manual_positions: true
+
+# --- Realised-outcome grading (bot/trade_grades.py)
+# The ingested corpus weights each SMC concept by how often it is DISCUSSED
+# across ~1000 transcripts. That is popularity, not performance: the corpus
+# holds no win rate, no P&L, no backtest result. This records what this
+# account's own closed trades actually did, per detector, so those weights can
+# eventually be graded against outcomes instead of mentions.
+#
+# It records only. Nothing here changes sizing, entry, or exit, and no grade
+# is reported for a detector until it has MIN_SAMPLE (10) closed trades --
+# a 100% win rate off one trade is noise, and publishing it would look like
+# evidence.
+trade_grades: true
+trade_grades_path: trade_grades.json

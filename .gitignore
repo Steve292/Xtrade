@@ -46,3 +46,7 @@ knowledge_channels.json
 
 # Local dev virtualenv used for running the test suite
 .devvenv/
+
+# Realised-outcome grading store (bot/trade_grades.py) — this account's own
+# closed trades, not source.
+trade_grades.json
