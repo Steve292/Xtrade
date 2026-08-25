@@ -174,5 +174,12 @@ knowledge:
 # OFF: effective_risk_pct is exactly risk_pct_for_fixed_usd()'s result.
 position_sizing:
   enabled: true
-  max_multiple: 1.5      # never more than 1.5x the staged fixed-dollar risk
+  # 1.0, lowered from 1.5 at explicit user request after live sizing was
+  # observed pushing a trade from the staged $3.00 to $4.18 — 67% of an $8.27
+  # account — driven by the confidence multiplier (x1.45 at 97.7% confidence).
+  # At 1.0 the multiplier chain can still REDUCE risk below the staged figure
+  # when volatility or regime argue for it, but can never raise it above.
+  # The backtest had shown these multipliers reducing risk ($3.00 -> $2.08);
+  # live they amplified instead, so the relative cap is pinned at parity.
+  max_multiple: 1.0
   max_risk_usd: 5.0      # ...and never more than this many dollars, ever
