@@ -362,7 +362,7 @@ def api_regime():
 
 @app.get("/api/top-market-cap")
 def api_top_market_cap():
-    """Read-only top-20-by-market-cap leaderboard (rank, price, 24h %,
+    """Read-only top-20-by-market-cap leaderboard (rank, price, 1h %, 24h %,
     market cap, volume) via CoinGecko — the same table CoinMarketCap's
     homepage shows. Purely a dashboard display: this feed never touches the
     watchlist or screening/entry logic, which stays config.yaml's fixed

@@ -159,6 +159,41 @@ def test_coingecko_top_movers_avg_7d_pct_returns_none_on_empty():
     assert coingecko_top_movers_avg_7d_pct("meme-token", fetch=fetch) is None
 
 
+def test_coingecko_top_by_market_cap_reads_hourly_change_from_in_currency_field():
+    """1h has no plain `price_change_percentage_1h` form — CoinGecko only
+    returns it as `..._1h_in_currency`, and only when 1h is named in the
+    request. Reading the plain key would yield None on every row."""
+    captured = {}
+
+    def fetch(url, **kwargs):
+        captured.update(kwargs.get("params") or {})
+        return FakeResponse([{
+            "market_cap_rank": 1, "symbol": "btc", "name": "Bitcoin",
+            "current_price": 65000.0,
+            "price_change_percentage_1h_in_currency": -0.42,
+            "price_change_percentage_24h": 2.5,
+            "market_cap": 1_280_000_000_000.0, "total_volume": 30_000_000_000.0,
+        }])
+
+    rows = coingecko_top_by_market_cap(limit=1, fetch=fetch)
+    assert "1h" in captured["price_change_percentage"], "1h was not requested"
+    assert rows[0]["change_1h_pct"] == -0.42
+    assert rows[0]["change_24h_pct"] == 2.5
+
+
+def test_coingecko_top_by_market_cap_tolerates_missing_hourly_change():
+    """A row without the 1h field must yield None, not raise — the dashboard
+    renders None as an em dash."""
+    def fetch(url, **kwargs):
+        return FakeResponse([{
+            "market_cap_rank": 1, "symbol": "btc", "name": "Bitcoin",
+            "current_price": 65000.0, "price_change_percentage_24h": 2.5,
+            "market_cap": 1_280_000_000_000.0, "total_volume": 30_000_000_000.0,
+        }])
+
+    assert coingecko_top_by_market_cap(limit=1, fetch=fetch)[0]["change_1h_pct"] is None
+
+
 def test_coingecko_top_by_market_cap_shapes_rows():
     payload = [
         {
@@ -174,10 +209,14 @@ def test_coingecko_top_by_market_cap_shapes_rows():
     ]
     fetch = lambda url, **kw: FakeResponse(payload)
     result = coingecko_top_by_market_cap(limit=2, fetch=fetch)
+    # change_1h_pct is None here: this payload predates the 1h column and
+    # carries no `price_change_percentage_1h_in_currency` field.
     assert result == [
         {"rank": 1, "symbol": "BTC", "name": "Bitcoin", "price": 65000.0,
+         "change_1h_pct": None,
          "change_24h_pct": 2.5, "market_cap": 1_280_000_000_000.0, "volume_24h": 30_000_000_000.0},
         {"rank": 2, "symbol": "ETH", "name": "Ethereum", "price": 3400.0,
+         "change_1h_pct": None,
          "change_24h_pct": -1.1, "market_cap": 410_000_000_000.0, "volume_24h": 12_000_000_000.0},
     ]
 

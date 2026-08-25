@@ -186,10 +186,17 @@ def crypto_news_headlines(limit: int = 30, fetch=_default_fetch) -> list[dict] |
 def coingecko_top_by_market_cap(limit: int = 10, fetch=_default_fetch) -> list[dict] | None:
     """Top `limit` coins ranked by market cap, via CoinGecko's public (no-key)
     markets endpoint — the same leaderboard CoinMarketCap's homepage shows
-    (rank, price, 24h %, market cap, volume), for the dashboard's "Top by
-    Market Cap" widget. Purely informational: this feed is never consulted
+    (rank, price, 1h %, 24h %, market cap, volume), for the dashboard's "Top
+    by Market Cap" widget. Purely informational: this feed is never consulted
     by the watchlist or screening/entry logic (see config.yaml's fixed
-    majors/memecoins list for what the bot actually trades)."""
+    majors/memecoins list for what the bot actually trades).
+
+    Note the two different 24h fields CoinGecko returns. `price_change_
+    percentage_24h` is always present; the `_in_currency` variants only
+    appear for the windows named in the `price_change_percentage` parameter.
+    1h has no plain form at all, so it must be read from
+    `price_change_percentage_1h_in_currency` — reading `..._1h` would
+    silently yield None on every row."""
     try:
         resp = fetch(
             "https://api.coingecko.com/api/v3/coins/markets",
@@ -198,7 +205,7 @@ def coingecko_top_by_market_cap(limit: int = 10, fetch=_default_fetch) -> list[d
                 "order": "market_cap_desc",
                 "per_page": limit,
                 "page": 1,
-                "price_change_percentage": "24h",
+                "price_change_percentage": "1h,24h",
             },
             headers=_UA,
             timeout=_TIMEOUT,
@@ -211,6 +218,7 @@ def coingecko_top_by_market_cap(limit: int = 10, fetch=_default_fetch) -> list[d
                 "symbol": (r.get("symbol") or "").upper(),
                 "name": r.get("name"),
                 "price": r.get("current_price"),
+                "change_1h_pct": r.get("price_change_percentage_1h_in_currency"),
                 "change_24h_pct": r.get("price_change_percentage_24h"),
                 "market_cap": r.get("market_cap"),
                 "volume_24h": r.get("total_volume"),

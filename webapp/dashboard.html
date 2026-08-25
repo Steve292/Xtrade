@@ -196,8 +196,8 @@
     </h2>
     <div class="table-scroll">
     <table id="topMcapTable">
-      <thead><tr><th>#</th><th>Coin</th><th>Price</th><th>24h %</th><th>Market Cap</th><th>Volume (24h)</th></tr></thead>
-      <tbody id="topMcapBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+      <thead><tr><th>#</th><th>Coin</th><th>Price</th><th>1h %</th><th>24h %</th><th>Market Cap</th><th>Volume (24h)</th></tr></thead>
+      <tbody id="topMcapBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
     </table>
     </div>
   </section>
@@ -830,17 +830,20 @@ async function refreshTopMarketCap() {
       var tr = document.createElement('tr');
       var chg = r.change_24h_pct;
       var chgCls = chg > 0 ? 'up' : chg < 0 ? 'dn' : 'mut';
+      var h1 = r.change_1h_pct;
+      var h1Cls = h1 > 0 ? 'up' : h1 < 0 ? 'dn' : 'mut';
       tr.innerHTML =
         '<td class="mut">' + (r.rank ?? '—') + '</td>' +
         '<td><b>' + r.symbol + '</b> <span class="mut">' + r.name + '</span></td>' +
         '<td>' + fmtUsd(r.price) + '</td>' +
+        '<td class="' + h1Cls + '">' + (h1 === null || h1 === undefined ? '—' : (h1 > 0 ? '+' : '') + h1.toFixed(2) + '%') + '</td>' +
         '<td class="' + chgCls + '">' + (chg === null || chg === undefined ? '—' : (chg > 0 ? '+' : '') + chg.toFixed(2) + '%') + '</td>' +
         '<td>' + fmtCompactUsd(r.market_cap) + '</td>' +
         '<td>' + fmtCompactUsd(r.volume_24h) + '</td>';
       body.appendChild(tr);
     });
     if (!(d.rows || []).length) {
-      body.innerHTML = '<tr><td colspan="6" class="empty">No data.</td></tr>';
+      body.innerHTML = '<tr><td colspan="7" class="empty">No data.</td></tr>';
     }
   } catch (e) { toast('top market cap: ' + e.message, true); }
 }
