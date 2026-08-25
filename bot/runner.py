@@ -390,6 +390,8 @@ def run_bot(config_path: str = "config.yaml") -> None:
                             signal, screen_result, sm_direction, sm_bullish, sm_bearish,
                             knowledge_result=knowledge_result,
                             knowledge_max_adjust_pct=knowledge_cfg.get("max_adjust_pct", 5.0),
+                            normalise_by_direction=config.get(
+                                "normalise_smart_money_by_direction", False),
                         )
                         if signal.type != SignalType.NONE
                         else None

@@ -74,7 +74,7 @@ def fetch(symbol: str, timeframe: str, bars: int):
 
 
 def run_arm(df, config, *, extended, knowledge_on, sizing_on, index, balance, staged_usd,
-            sm=(SM_DIRECTION, SM_BULL, SM_BEAR)):
+            sm=(SM_DIRECTION, SM_BULL, SM_BEAR), screen_overrides=None):
     strategy = SMCStrategy(
         swing_lookback=config.get("swing_lookback", 5),
         order_block_lookback=config.get("order_block_lookback", 20),
@@ -85,8 +85,13 @@ def run_arm(df, config, *, extended, knowledge_on, sizing_on, index, balance, st
         extended_detectors=extended,
         extended_max_adjust=config.get("smc", {}).get("extended_max_adjust", 0.10),
     )
-    screener = TradeScreener(ScreenConfig.from_dict(config.get("screening", {})))
-    auto_fire_pct = 90.0  # live_state.json's current value
+    screen_cfg = dict(config.get("screening", {}))
+    screen_cfg.update(screen_overrides or {})
+    screener = TradeScreener(ScreenConfig.from_dict(screen_cfg))
+    # Read the live runtime value rather than hardcoding it -- a stale constant
+    # here silently measures a threshold the bot is not actually using.
+    from bot import live_state
+    auto_fire_pct = live_state.get_auto_fire_pct()
     sizing_cfg = config.get("position_sizing", {})
     max_multiple = float(sizing_cfg.get("max_multiple", 1.5))
     max_risk_usd = float(sizing_cfg.get("max_risk_usd", 5.0))
@@ -195,12 +200,21 @@ def main() -> None:
           + f"\nBalance ${args.balance:.2f}, staged risk ${args.staged_usd:.2f}/trade, "
             f"auto-fire threshold 90%\n")
 
+    live_flags = dict(
+        extended=config.get("smc", {}).get("extended_detectors", False),
+        knowledge_on=config.get("knowledge", {}).get("enabled", False),
+        sizing_on=config.get("position_sizing", {}).get("enabled", False),
+    )
+    # Liquidity-quality flags, measured one at a time against the live config
+    # so each one's effect on approvals is isolated.
     arms = [
-        ("baseline (all flags off)", dict(extended=False, knowledge_on=False, sizing_on=False)),
-        ("+ extended detectors",     dict(extended=True,  knowledge_on=False, sizing_on=False)),
-        ("+ knowledge",              dict(extended=False, knowledge_on=True,  sizing_on=False)),
-        ("+ adaptive sizing",        dict(extended=False, knowledge_on=False, sizing_on=True)),
-        ("all three on",             dict(extended=True,  knowledge_on=True,  sizing_on=True)),
+        ("live config (as running)", live_flags, {}),
+        ("+ merge_pools",           live_flags, {"merge_pools": True}),
+        ("+ require_reclaim",       live_flags, {"require_reclaim": True}),
+        ("+ htf_sweep (both)",      live_flags, {"htf_sweep": True, "htf_sweep_require_both": True}),
+        ("+ htf_sweep (either)",    live_flags, {"htf_sweep": True, "htf_sweep_require_both": False}),
+        ("all quality flags on",    live_flags, {"merge_pools": True, "require_reclaim": True,
+                                                 "htf_sweep": True, "htf_sweep_require_both": True}),
     ]
 
     n_agree = max(0, min(9, args.sm_agreement))
@@ -212,9 +226,10 @@ def main() -> None:
            f"{'avg%':>7} {'avg$':>7} {'max$':>7} {'cap':>4}")
     print(hdr); print("-" * len(hdr))
     base = None
-    for name, kw in arms:
+    for name, kw, overrides in arms:
         s = run_arm(df, config, index=index, balance=args.balance,
-                    staged_usd=args.staged_usd, sm=sm, **kw)
+                    staged_usd=args.staged_usd, sm=sm,
+                    screen_overrides=overrides, **kw)
         n = max(s["approved"], 1)
         row = (f"{name:<26} {s['signals']:>5} {s['approved']:>5} {s['auto_fire']:>5} "
                f"{s['queued']:>6} {s['final_pct_sum']/n:>7.2f} "
@@ -222,9 +237,12 @@ def main() -> None:
         if base is None:
             base = s
         else:
-            delta = s["auto_fire"] - base["auto_fire"]
-            if delta:
-                row += f"   auto-fire {delta:+d}"
+            d_appr = s["approved"] - base["approved"]
+            d_fire = s["auto_fire"] - base["auto_fire"]
+            marks = []
+            if d_appr: marks.append(f"approved {d_appr:+d}")
+            if d_fire: marks.append(f"auto-fire {d_fire:+d}")
+            if marks: row += "   " + ", ".join(marks)
         print(row)
 
     print("\nAUTO = setups that would fire with NO human review. That column is "

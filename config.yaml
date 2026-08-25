@@ -226,3 +226,19 @@ respect_manual_positions: true
 # evidence.
 trade_grades: true
 trade_grades_path: trade_grades.json
+
+# --- Direction-fair smart-money scoring (bot/unified_screen.py)
+# final_pct averages SMC confidence with smart-money agreement, and agreement
+# is divided by all 9 modules. But only 6 can ever vote BUY and only 4 can ever
+# vote SELL -- gex, narrative_decay and session never emit a direction at all.
+#
+# So a maximally-agreed SHORT tops out at final_pct 72%, while a maximally-
+# agreed LONG reaches 83%. One auto_fire threshold applied to both is not one
+# standard: at 75% it is reachable for longs and arithmetically IMPOSSIBLE for
+# shorts, which makes the bot silently long-only.
+#
+# true: agreement is scored against what each direction can actually achieve,
+# so both reach 100% when fully agreed and one threshold means one thing.
+# false (default): the original /9 scoring, kept as the default because this
+# changes final_pct and final_pct decides unattended firing.
+normalise_smart_money_by_direction: false

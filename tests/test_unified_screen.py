@@ -248,3 +248,82 @@ def test_final_pct_stays_within_zero_to_hundred():
                 knowledge_result=_Knowledge(pct), knowledge_max_adjust_pct=50.0,
             )
             assert 0.0 <= result.final_pct <= 100.0
+
+
+# --- direction-fair scoring -------------------------------------------------
+# Only 6 of the 9 smart-money modules can vote BUY and only 4 can vote SELL,
+# so dividing agreement by 9 scores a short against a ceiling it can never
+# reach. These pin the fix and the flag-off parity.
+
+
+def test_normalisation_is_off_by_default():
+    """Off by default: it changes final_pct, and final_pct decides firing."""
+    base = evaluate_unified(
+        _signal(SignalType.SHORT), _screen(True, "short"),
+        smart_money_direction="BEARISH", smart_money_bullish_count=0,
+        smart_money_bearish_count=4,
+    )
+    explicit = evaluate_unified(
+        _signal(SignalType.SHORT), _screen(True, "short"),
+        smart_money_direction="BEARISH", smart_money_bullish_count=0,
+        smart_money_bearish_count=4, normalise_by_direction=False,
+    )
+    assert _close(base.final_pct, explicit.final_pct)
+    assert _close(base.final_pct, (0.8 * 100 + (4 / 9) * 100) / 2)
+
+
+def test_unnormalised_short_cannot_reach_the_long_ceiling():
+    """The bug, stated as a test: a fully-agreed short scores below a
+    fully-agreed long, purely because of how many modules can vote each way."""
+    from bot.unified_screen import MAX_BEARISH_MODULES, MAX_BULLISH_MODULES
+
+    long_max = evaluate_unified(
+        _signal(SignalType.LONG, 1.0), _screen(True),
+        smart_money_direction="BULLISH", smart_money_bullish_count=MAX_BULLISH_MODULES,
+        smart_money_bearish_count=0,
+    )
+    short_max = evaluate_unified(
+        _signal(SignalType.SHORT, 1.0), _screen(True, "short"),
+        smart_money_direction="BEARISH", smart_money_bullish_count=0,
+        smart_money_bearish_count=MAX_BEARISH_MODULES,
+    )
+    assert short_max.final_pct < long_max.final_pct
+    assert short_max.final_pct < 75.0, "a maximal short is below a 75% fire line"
+
+
+def test_normalised_both_directions_reach_the_same_ceiling():
+    from bot.unified_screen import MAX_BEARISH_MODULES, MAX_BULLISH_MODULES
+
+    long_max = evaluate_unified(
+        _signal(SignalType.LONG, 1.0), _screen(True),
+        smart_money_direction="BULLISH", smart_money_bullish_count=MAX_BULLISH_MODULES,
+        smart_money_bearish_count=0, normalise_by_direction=True,
+    )
+    short_max = evaluate_unified(
+        _signal(SignalType.SHORT, 1.0), _screen(True, "short"),
+        smart_money_direction="BEARISH", smart_money_bullish_count=0,
+        smart_money_bearish_count=MAX_BEARISH_MODULES, normalise_by_direction=True,
+    )
+    assert _close(long_max.final_pct, short_max.final_pct)
+    assert _close(long_max.final_pct, 100.0)
+
+
+def test_normalised_agreement_never_exceeds_one_hundred():
+    """A module set richer than the derived maximum must clamp, not overflow."""
+    r = evaluate_unified(
+        _signal(SignalType.SHORT, 1.0), _screen(True, "short"),
+        smart_money_direction="BEARISH", smart_money_bullish_count=0,
+        smart_money_bearish_count=99, normalise_by_direction=True,
+    )
+    assert r.final_pct <= 100.0
+
+
+def test_normalisation_does_not_change_approval():
+    """It rescales a score. Approval still depends only on the two gates."""
+    for norm in (False, True):
+        r = evaluate_unified(
+            _signal(SignalType.SHORT), _screen(False, "short"),
+            smart_money_direction="BEARISH", smart_money_bullish_count=0,
+            smart_money_bearish_count=4, normalise_by_direction=norm,
+        )
+        assert not r.approved

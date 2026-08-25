@@ -44,6 +44,25 @@ from bot.smc.strategy import Signal, SignalType
 
 _TOTAL_SMART_MONEY_MODULES = 9  # bot/smart_money.py's 8 + regulatory_news
 
+# How many of those 9 can actually vote each way. Derived by reading the
+# modules, not assumed:
+#
+#   BUY-capable  (6): cvd, divergence, liquidation_heatmap, smc_fib,
+#                     stablecoin_flow, regulatory_news
+#   SELL-capable (4): cvd, smc_fib, stablecoin_flow, regulatory_news
+#
+# gex, narrative_decay and session never emit a direction at all in this
+# implementation -- they are timing/caution gates that abstain as NEUTRAL.
+#
+# Dividing agreement by 9 therefore understates BOTH directions and understates
+# shorts far worse: a maximally-agreed short reaches 4/9 = 44%, capping its
+# final_pct at 72%, while a maximally-agreed long reaches 6/9 = 67% and caps at
+# 83%. One auto_fire threshold applied to both is not one standard -- at 75% it
+# is reachable for longs and arithmetically impossible for shorts, which makes
+# the bot silently long-only. See normalise_by_direction in evaluate_unified.
+MAX_BULLISH_MODULES = 6
+MAX_BEARISH_MODULES = 4
+
 
 @dataclass
 class UnifiedResult:
@@ -77,6 +96,7 @@ def evaluate_unified(
     smart_money_bearish_count: int,
     knowledge_result=None,
     knowledge_max_adjust_pct: float = DEFAULT_KNOWLEDGE_MAX_ADJUST_PCT,
+    normalise_by_direction: bool = False,
 ) -> UnifiedResult:
     """Adding `knowledge_result` (a bot.knowledge.KnowledgeResult) layers the
     ingested corpus on as a THIRD, advisory-only input. Omitting it — which
@@ -109,7 +129,24 @@ def evaluate_unified(
         agreement_count = 0
         smart_money_ok = False
 
-    smart_money_agreement_pct = (agreement_count / _TOTAL_SMART_MONEY_MODULES) * 100
+    # Agreement as a share of what this DIRECTION can actually achieve, rather
+    # than of all 9 modules. Without it a short is scored against a ceiling it
+    # can never reach, so any single auto_fire threshold means something
+    # different for a long than for a short. Off by default: it changes
+    # final_pct, and that decides unattended firing.
+    if normalise_by_direction:
+        denominator = (
+            MAX_BULLISH_MODULES if signal.type == SignalType.LONG
+            else MAX_BEARISH_MODULES if signal.type == SignalType.SHORT
+            else _TOTAL_SMART_MONEY_MODULES
+        )
+    else:
+        denominator = _TOTAL_SMART_MONEY_MODULES
+    # Clamp: a module set richer than the derived maximum must not push
+    # agreement past 100%.
+    smart_money_agreement_pct = min(
+        100.0, (agreement_count / denominator) * 100 if denominator else 0.0
+    )
     final_pct = (signal.confidence * 100 + smart_money_agreement_pct) / 2
 
     # Advisory knowledge layer. `available=False` means "no opinion" (missing
