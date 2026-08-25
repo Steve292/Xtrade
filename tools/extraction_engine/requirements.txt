@@ -1,0 +1,2 @@
+PyPDF2>=3.0
+PyMuPDF>=1.22.0; extra == "images"

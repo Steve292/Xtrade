@@ -179,3 +179,89 @@ def test_missing_htf_frame_falls_back_to_ltf_without_raising():
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# --- market-structure shift gate --------------------------------------------
+# SMCStrategy already SCORES a recent BOS/CHoCH as confluence, but scoring is
+# not gating: without this a setup can be approved on zones and a sweep alone,
+# with structure never having shifted in its favour.
+
+
+def _flat(n=80) -> pd.DataFrame:
+    """No swing structure at all, so no BOS or CHoCH can be detected."""
+    return _df([_bar(100, 101, 99, 100) for _ in range(n)])
+
+
+def _shifted_up() -> pd.DataFrame:
+    """A frame that genuinely contains a recent bullish CHoCH.
+
+    Built from a random walk rather than hand-drawn candles: the first attempt
+    hand-crafted a "decisive break" that find_swing_points never registered as
+    a swing at all, so the test was asserting against a frame with no
+    detectable structure. Searching a walk for a frame the detector actually
+    flags tests the gate instead of the fixture.
+    """
+    import numpy as np
+
+    from bot.smc.structure import detect_structure_breaks, find_swing_points
+
+    for seed in range(200):
+        rng = np.random.default_rng(seed)
+        price, rows = 100.0, []
+        for _ in range(200):
+            o = price
+            c = price + rng.normal(0, 1.4)
+            h = max(o, c) + abs(rng.normal(0, 0.8))
+            l = min(o, c) - abs(rng.normal(0, 0.8))
+            rows.append(_bar(o, h, l, c))
+            price = c
+        df = _df(rows)
+        events = detect_structure_breaks(df, find_swing_points(df, 5))
+        if any(e.direction == "bullish" and e.index >= len(df) - 20 for e in events):
+            return df
+    raise AssertionError("no frame with a recent bullish break found")
+
+
+def test_structure_gate_absent_when_flag_off():
+    res = TradeScreener(ScreenConfig(require_structure_shift=False)).screen(
+        _sig(), _flat(), _flat())
+    assert not any(c.name == "Market structure shift" for c in res.checks)
+
+
+def test_structure_gate_rejects_a_frame_with_no_shift():
+    res = TradeScreener(ScreenConfig(require_structure_shift=True)).screen(
+        _sig(), _flat(), _flat())
+    check = next(c for c in res.checks if c.name == "Market structure shift")
+    assert not check.passed
+    assert not res.approved
+
+
+def test_structure_gate_passes_when_a_break_aligns_with_the_signal():
+    df = _shifted_up()
+    res = TradeScreener(ScreenConfig(require_structure_shift=True)).screen(
+        _sig(SignalType.LONG), df, df)
+    check = next(c for c in res.checks if c.name == "Market structure shift")
+    assert check.passed, f"expected a bullish shift, got: {check.detail}"
+
+
+def test_structure_gate_rejects_a_short_on_a_bullish_shift():
+    """Direction must be respected — an upward break does not authorise a
+    short. This also pins the long/short -> bullish/bearish translation; a
+    silent vocabulary mismatch would make the gate reject everything."""
+    df = _shifted_up()
+    res = TradeScreener(ScreenConfig(require_structure_shift=True)).screen(
+        _sig(SignalType.SHORT), df, df)
+    check = next(c for c in res.checks if c.name == "Market structure shift")
+    assert not check.passed
+
+
+def test_structure_gate_respects_the_recency_window():
+    """A break that happened long ago must not authorise a trade now."""
+    df = _df(_shifted_up().values.tolist() + [_bar(100, 101, 99, 100)] * 60)
+    fresh = TradeScreener(ScreenConfig(require_structure_shift=True, structure_shift_bars=200))
+    stale = TradeScreener(ScreenConfig(require_structure_shift=True, structure_shift_bars=5))
+    f = next(c for c in fresh.screen(_sig(), df, df).checks if c.name == "Market structure shift")
+    s = next(c for c in stale.screen(_sig(), df, df).checks if c.name == "Market structure shift")
+    assert not s.passed, "a 5-bar window should not see a break 60 bars back"
+    if f.passed:
+        assert "ago" in f.detail

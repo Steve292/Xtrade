@@ -33,7 +33,7 @@ import pandas as pd
 from bot.smc.fibonacci import ote_band, recent_leg
 from bot.smc.liquidity import detect_liquidity_pools, recent_sweep
 from bot.smc.strategy import Signal, SignalType
-from bot.smc.structure import Trend, detect_trend, find_swing_points
+from bot.smc.structure import Trend, detect_structure_breaks, detect_trend, find_swing_points
 from bot.smc.supply_demand import detect_supply_demand_zones, nearest_zone
 
 
@@ -86,6 +86,12 @@ class ScreenConfig:
     # which setups pass, and that belongs behind a flag.
     merge_pools: bool = False
     require_reclaim: bool = False
+    # Require a market-structure shift (BOS/CHoCH) in the signal's direction.
+    # SMCStrategy already scores a recent break as confluence, but scoring is
+    # not gating: without this a setup can be approved on zones and a sweep
+    # alone, with structure never actually having shifted in its favour.
+    require_structure_shift: bool = False
+    structure_shift_bars: int = 20
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
@@ -148,6 +154,31 @@ class TradeScreener:
                       f"{'both' if cfg.htf_sweep_require_both else 'either'})")
 
         checks.append(Check("Liquidity sweep", swept, detail))
+
+        # 3b. Market structure shift — a BOS or CHoCH must have occurred in the
+        #     signal's own direction, recently. Placed before the risk checks
+        #     so a structurally unsupported setup is rejected on the reason
+        #     that actually disqualifies it.
+        if cfg.require_structure_shift:
+            # StructureEvent.direction is bullish/bearish; signal.type is
+            # long/short. Translate rather than compare across vocabularies —
+            # a silent mismatch here would make the gate reject everything.
+            direction_word = "bullish" if direction == "long" else "bearish"
+            swings = find_swing_points(df, cfg.swing_lookback)
+            events = detect_structure_breaks(df, swings)
+            cutoff = len(df) - cfg.structure_shift_bars
+            aligned = [
+                e for e in events
+                if e.direction == direction_word and e.index >= cutoff
+            ]
+            latest = aligned[-1] if aligned else None
+            checks.append(Check(
+                "Market structure shift", latest is not None,
+                (f"{latest.kind.upper()} {latest.direction} "
+                 f"{len(df) - 1 - latest.index} bars ago"
+                 if latest else
+                 f"no {direction_word} BOS/CHoCH in {cfg.structure_shift_bars} bars"),
+            ))
 
         # 4. Risk management — reward:risk and a valid stop
         risk = abs(signal.entry - signal.stop_loss)
