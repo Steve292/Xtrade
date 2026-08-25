@@ -33,6 +33,14 @@ import time
 LOG = sys.argv[1] if len(sys.argv) > 1 else "logs/mt5-autotrader.log"
 COOLDOWN = 600  # seconds between repeats of the same fault class
 
+# GATE events only fire at or above this final_pct. A setup oscillating in the
+# 55-70 band flips between its blocking gates every 30-90s as price moves in
+# and out of a zone -- that is the market breathing, not progress, and
+# forwarding it buries the events that matter (and risks the watch being shut
+# off for volume). Below this, gate changes are tracked silently; the state is
+# still current, it just is not announced.
+GATE_MIN_FINAL = 70
+
 RE_QUEUED = re.compile(r"\[([A-Z0-9]+c?)\].*SIGNAL (\w+).*final (\d+)%.*QUEUED")
 RE_FIRED = re.compile(r"\[([A-Z0-9]+c?)\].*(LIVE ORDER FIRED|PAPER FILL)")
 RE_GATE = re.compile(r"\[([A-Z0-9]+c?)\].*SIGNAL (\w+) conf (\d+)% final (\d+)% rejected at screen: (.+?)\s*$")
@@ -79,7 +87,8 @@ def main() -> None:
     last_gate: dict = {}
     last_halt: dict = {}
     last_fault: dict = {}
-    emit("WATCH", f"following {LOG} — reporting QUEUED / FIRED / gate changes / faults")
+    emit("WATCH", f"following {LOG} — QUEUED / FIRED / SIZE / HALT always; "
+                  f"GATE only at final >= {GATE_MIN_FINAL}%; faults once per {COOLDOWN // 60}min")
 
     for line in follow(LOG):
         m = RE_QUEUED.search(line)
@@ -110,17 +119,20 @@ def main() -> None:
         if m:
             sym, side, conf, final, gate = m.groups()
             key = (side, gate)
-            if last_gate.get(sym) != key:
-                last_gate[sym] = key
-                emit("GATE", f"{sym} {side} conf {conf}% final {final}% — now blocked by: {gate}")
+            changed = last_gate.get(sym) != key
+            last_gate[sym] = key
+            if changed and int(final) >= GATE_MIN_FINAL:
+                emit("GATE", f"{sym} {side} conf {conf}% final {final}% — now blocked by: {gate}"
+                             f"  [{GATE_MIN_FINAL}%+ band]")
             continue
 
         m = RE_NOSIG.search(line)
         if m:
             sym = m.group(1)
-            if last_gate.get(sym) is not None:
-                last_gate[sym] = None
-                emit("GATE", f"{sym} — setup gone, no signal")
+            # Tracked but not announced: a setup vanishing matters only if it
+            # was near the line, and that case is already covered by the
+            # QUEUED/FIRED events.
+            last_gate[sym] = None
             continue
 
         for name, pattern in FAULTS:
