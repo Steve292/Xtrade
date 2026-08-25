@@ -248,6 +248,32 @@
 
   <section>
     <h2>
+      <span><span class="live-dot" title="Live — polled from the MT5 bridge directly"></span>Traded Pairs</span>
+      <span class="sub" style="margin:0;font-weight:400;">the instruments this bot actually trades (config.yaml mt5_watchlist) — % from hourly MT5 candles</span>
+    </h2>
+    <div class="table-scroll">
+    <table id="pairsTable">
+      <thead><tr><th>Symbol</th><th>Bid</th><th>Ask</th><th>1h %</th><th>24h %</th><th>7d %</th></tr></thead>
+      <tbody id="pairsBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>
+      <span><span class="live-dot" title="Live — polled from the MT5 bridge directly"></span>MT5 Positions by Origin</span>
+      <span class="sub" style="margin:0;font-weight:400;">this bot stamps magic 770077; anything else was placed manually or by another system — the Hyperliquid table further down is separate</span>
+    </h2>
+    <div class="table-scroll">
+    <table id="mt5PosTable">
+      <thead><tr><th>Origin</th><th>Symbol</th><th>Side</th><th>Volume</th><th>Entry</th><th>SL</th><th>TP</th><th>P&amp;L</th></tr></thead>
+      <tbody id="mt5PosBody"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>
       <span><span class="live-dot" title="Live — polled from the MT5 bridge directly"></span>MT5 Watchlist Signals</span>
       <span class="sub" style="margin:0;font-weight:400;">CVD/heatmap/SMC+Fib/session only — GEX, SSR, meme score, BTC.D have no forex/commodity equivalent</span>
     </h2>
@@ -503,6 +529,81 @@ async function refreshRegime() {
 
     renderMt5Signals(d.mt5_watchlist_analysis || []);
   } catch (e) { toast('regime: ' + e.message, true); }
+}
+
+async function refreshPairs() {
+  try {
+    var d = await api('/api/pairs');
+    renderPairs(d.pairs || []);
+    var pos = d.positions || {bot: [], manual: []};
+    renderMt5Positions((pos.bot || []).concat(pos.manual || []));
+  } catch (e) { toast('pairs: ' + e.message, true); }
+}
+
+function pctCell(v) {
+  if (v === null || v === undefined) return '<td class="mut">—</td>';
+  var cls = v > 0 ? 'up' : v < 0 ? 'dn' : 'mut';
+  return '<td class="' + cls + '">' + (v > 0 ? '+' : '') + v.toFixed(2) + '%</td>';
+}
+
+function renderPairs(rows) {
+  var body = document.getElementById('pairsBody');
+  if (!body) return;
+  body.innerHTML = '';
+  if (!rows || !rows.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">No pairs configured.</td></tr>';
+    return;
+  }
+  rows.forEach(function(r) {
+    var tr = document.createElement('tr');
+    if (r.error) {
+      tr.innerHTML = '<td><b>' + (r.symbol || '?') + '</b></td><td colspan="5" class="mut">' + r.error + '</td>';
+    } else {
+      tr.innerHTML =
+        '<td><b>' + r.symbol + '</b></td>' +
+        '<td>' + (r.bid != null ? r.bid.toLocaleString(undefined, {maximumFractionDigits: 5}) : '—') + '</td>' +
+        '<td>' + (r.ask != null ? r.ask.toLocaleString(undefined, {maximumFractionDigits: 5}) : '—') + '</td>' +
+        pctCell(r.change_1h_pct) + pctCell(r.change_24h_pct) + pctCell(r.change_7d_pct);
+      tr.style.cursor = 'pointer';
+      tr.title = 'Click for ' + r.symbol + '\'s live chart';
+      tr.onclick = function() { openCoinDetail(r.symbol, 'mt5'); };
+    }
+    body.appendChild(tr);
+  });
+}
+
+function renderMt5Positions(rows) {
+  // NOT getElementById('posBody') -- that id belongs to the Hyperliquid
+  // positions table further down the page, and getElementById returns the
+  // first match, so both renderers would overwrite each other every refresh.
+  var body = document.getElementById('mt5PosBody');
+  if (!body) return;
+  body.innerHTML = '';
+  if (!rows || !rows.length) {
+    body.innerHTML = '<tr><td colspan="8" class="empty">Flat — no open positions.</td></tr>';
+    return;
+  }
+  // Bot positions first: those are the ones this dashboard can act on.
+  rows.slice().sort(function(a, b) {
+    return (a.origin === 'bot' ? 0 : 1) - (b.origin === 'bot' ? 0 : 1);
+  }).forEach(function(r) {
+    var isBot = r.origin === 'bot';
+    var tr = document.createElement('tr');
+    var badge = '<span class="' + (isBot ? 'up' : 'mut') + '" title="' +
+      (isBot ? 'placed by this bot (magic 770077)' : 'not placed by this bot — manual, or another system') +
+      '">' + (isBot ? 'BOT' : 'MANUAL') + '</span>';
+    var pnlCls = r.profit > 0 ? 'up' : r.profit < 0 ? 'dn' : 'mut';
+    tr.innerHTML =
+      '<td>' + badge + '</td>' +
+      '<td><b>' + r.symbol + '</b></td>' +
+      '<td class="' + (r.side === 'long' ? 'up' : 'dn') + '">' + r.side.toUpperCase() + '</td>' +
+      '<td>' + r.volume + '</td>' +
+      '<td>' + (r.price_open != null ? r.price_open.toLocaleString(undefined, {maximumFractionDigits: 5}) : '—') + '</td>' +
+      '<td>' + (r.sl ? r.sl.toLocaleString(undefined, {maximumFractionDigits: 5}) : '<span class="mut">none</span>') + '</td>' +
+      '<td>' + (r.tp ? r.tp.toLocaleString(undefined, {maximumFractionDigits: 5}) : '<span class="mut">none</span>') + '</td>' +
+      '<td class="' + pnlCls + '">' + fmtUsd(r.profit) + '</td>';
+    body.appendChild(tr);
+  });
 }
 
 function moduleCell(mod) {
@@ -947,6 +1048,7 @@ refreshPositions();
 refreshRegime();
 refreshPending();
 refreshTopMarketCap();
+refreshPairs();
 refreshWatchlist();
 setInterval(refreshStatus, 15000);
 setInterval(refreshPositions, 15000);
@@ -954,6 +1056,7 @@ setInterval(refreshRegime, 60000);  // server caches the underlying fetch for 15
 setInterval(refreshPending, 10000); // faster: these expire, and the countdown should look live
 setInterval(refreshTopMarketCap, 60000); // matches TOP_MCAP_CACHE_SECONDS server-side
 setInterval(refreshWatchlist, 30000); // matches WATCHLIST_CACHE_SECONDS server-side
+setInterval(refreshPairs, 20000);     // MT5 bridge is local; no server-side cache to match
 </script>
 </body>
 </html>

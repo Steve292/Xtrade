@@ -181,7 +181,7 @@ def _mt5_client() -> MT5Client:
 
 
 def _symbol_ticker(mt5: MT5Client, symbol: str) -> dict:
-    """Live price + 24h/7d % change for one MT5 symbol. Hourly candles are
+    """Live price + 1h/24h/7d % change for one MT5 symbol. Hourly candles are
     used as a stand-in for exact time offsets (N candles back = N hours ago),
     which holds cleanly for symbols that trade continuously — for FX/weekend-
     closed pairs the underlying candle count may run short near a weekend."""
@@ -190,6 +190,13 @@ def _symbol_ticker(mt5: MT5Client, symbol: str) -> dict:
     out = {"symbol": symbol, "bid": bid, "ask": ask, "mid": mid}
     try:
         candles = mt5.copy_rates(symbol, "1h", count=200)
+        if len(candles) > 1:
+            # One hourly candle back. The last row is the candle still
+            # forming, so its close is the current price, not an hour-old
+            # one -- index -2 is the last CLOSED hour.
+            price_1h_ago = float(candles.iloc[-2]["close"])
+            if price_1h_ago:
+                out["change_1h_pct"] = (mid - price_1h_ago) / price_1h_ago * 100
         if len(candles) > 24:
             price_24h_ago = float(candles.iloc[-25]["close"])
             out["change_24h_pct"] = (mid - price_24h_ago) / price_24h_ago * 100
@@ -378,6 +385,56 @@ def api_top_market_cap():
         else:
             app.logger.warning("top-market-cap refresh failed, serving stale cache")
     return jsonify({"rows": _top_mcap_cache["rows"], "fetched_at": _top_mcap_cache["fetched_at"]})
+
+
+@app.get("/api/pairs")
+def api_pairs():
+    """The instruments this bot actually trades, plus every open position on
+    the account grouped by who opened it.
+
+    Distinct from /api/watchlist, which is the Binance crypto leaderboard.
+    This one reads the MT5 bridge for config.yaml's mt5_watchlist -- gold
+    included, which no CoinGecko feed covers.
+
+    Positions are split on magic (bot/mt5/client.py's BOT_MAGIC): "bot" is
+    what this system placed, "manual" is everything else on the account.
+    The account is traded by hand as well, so showing a single undifferentiated
+    position count would misrepresent what the bot is responsible for.
+    """
+    symbols = CFG.get("mt5_watchlist") or [CFG.get("mt5_symbol", "EURUSDc")]
+    pairs, positions = [], {"bot": [], "manual": []}
+    try:
+        mt5 = _mt5_client()
+    except Exception as e:
+        return jsonify({
+            "error": f"MT5 bridge unavailable: {type(e).__name__}",
+            "pairs": [], "positions": positions,
+        }), 503
+
+    for sym in symbols:
+        try:
+            row = _symbol_ticker(mt5, sym)
+        except Exception as e:
+            row = {"symbol": sym, "error": f"{type(e).__name__}: {str(e)[:120]}"}
+        pairs.append(row)
+
+    try:
+        positions = mt5.positions_split()
+        # all_positions() reports profit in raw account units -- cents on a
+        # cent account. Convert before it reaches a UI that prefixes "$",
+        # the same conversion /api/performance already does.
+        for group in positions.values():
+            for pos in group:
+                pos["profit"] = pos["profit"] / MT5_CENT_DIVISOR
+    except Exception as e:
+        app.logger.warning("positions_split failed: %s", e)
+
+    return jsonify({
+        "pairs": pairs,
+        "positions": positions,
+        "bot_count": len(positions["bot"]),
+        "manual_count": len(positions["manual"]),
+    })
 
 
 @app.get("/api/watchlist")
