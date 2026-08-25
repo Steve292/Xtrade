@@ -21,30 +21,14 @@ risk_per_trade_pct: 1.0
 reward_risk_ratio: 2.0
 max_open_trades: 1
 
-# Fixed stop-loss distance from entry for every live trade, REPLACING the
-# order-block/FVG-boundary invalidation stop SMCStrategy would otherwise use
-# — set at explicit user request, paired with screening.max_stop_pct below
-# (raised from 2% to 25% so the Sniper-entry gate can still pass a 20% stop).
-# null/omitted keeps the original structural stop (used by backtests,
-# scan.py, and market_snapshot.py's informational second-opinion strategy,
-# none of which read this key).
-# null at explicit user request ("sniper entries"): hand the stop back to
-# SMCStrategy's structural invalidation — the order-block / FVG boundary the
-# setup is actually built on. Measured over 119 BTC setups in 3000 bars, that
-# stop sits at a 0.48% median distance against the 20% this was fixed at:
-# roughly 41x tighter.
-#
-# The fixed 20% was what made a sniper entry impossible. It also made trades
-# unresolvable — a walk-forward run over two months produced 2 approved BTC
-# setups and ZERO that ever reached stop or target, because BTC does not move
-# 20% inside a 15m trade's lifetime.
-#
-# Consequence to be clear about: position size scales INVERSELY with stop
-# distance, so the same $3 risk now buys ~40x the lots (0.01 -> ~0.8 on BTC),
-# and a 0.5% stop on 15m BTC will be hit often. That is what a sniper entry
-# is — precise entry, tight invalidation, frequent small losses paid for by
-# the 1:2 winners. Set back to 0.20 to revert.
-stop_loss_pct: 0.15
+# Structural stop-loss (bot/smc/strategy.py's order-block/FVG-boundary
+# invalidation), reinstated at explicit user request after a brief detour
+# through fixed 20% and 15% stops. Measured across 119 BTC setups in 3000
+# bars, the structural stop sits at a 0.48% median distance -- roughly 41x
+# tighter than the 20% fixed stop was, and the reason trades actually resolve
+# instead of sitting open for weeks. Paired with screening.max_stop_pct below,
+# which must stay tight enough to still gate on stop distance.
+stop_loss_pct: null
 
 # Staged fixed-dollar risk per trade, overriding risk_per_trade_pct above
 # when enabled — set at explicit user request: $3/trade while combined
@@ -112,16 +96,12 @@ screening:
   min_confidence: 0.55     # SMC confluence score floor
   min_rr: 2.0              # minimum reward:risk
   sniper_confidence: 0.65  # confidence required for a "sniper" entry
-  # MUST stay above stop_loss_pct or the Sniper gate rejects every trade.
-  # stop_loss_pct is back to a fixed 0.15, so 0.02 would fail on stop distance
-  # for 100% of setups — the bot would scan forever and never approve anything.
-  # 0.20 leaves headroom above the 15% stop.
-  #
-  # Note what this costs: with every stop fixed at 15% and the ceiling at 20%,
-  # the Sniper check can no longer fail on stop distance, so it stops gating
-  # that dimension — the same toothlessness the 0.25/0.20 pairing had. It
-  # still gates on sniper_confidence.
-  max_stop_pct: 0.20
+  # Back to 0.02 now that stops are structural again (median 0.48% across
+  # 119 measured BTC setups, p95 25%). This is what makes the Sniper gate
+  # actually gate on stop distance instead of passing unconditionally -- a
+  # fixed stop paired with a loose ceiling (0.20/0.15, then 0.25/0.20) let
+  # every setup through regardless of how wide its stop was.
+  max_stop_pct: 0.02
   # Require a market-structure shift (BOS or CHoCH) in the signal's own
   # direction before a trade is approved, at explicit user request. The
   # strategy already SCORES a recent break as confluence, but scoring is not
