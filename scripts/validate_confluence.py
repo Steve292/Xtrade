@@ -54,6 +54,11 @@ WARMUP = 200
 HTF_BARS = 100
 
 
+def live_state_auto_fire() -> float:
+    from bot import live_state
+    return live_state.get_auto_fire_pct()
+
+
 def fetch(symbol: str, timeframe: str, bars: int):
     import pandas as pd
     from bot.exchange import Exchange
@@ -73,8 +78,18 @@ def fetch(symbol: str, timeframe: str, bars: int):
     return df
 
 
-def run_arm(df, config, *, extended, knowledge_on, sizing_on, index, balance, staged_usd,
-            sm=(SM_DIRECTION, SM_BULL, SM_BEAR), screen_overrides=None):
+def collect_candidates(df, config, *, extended, step=4):
+    """Every bar that produces a signal, collected ONCE.
+
+    Arms must be scored against an IDENTICAL candidate set. The earlier
+    version re-walked history inside each arm and de-duplicated on first
+    occurrence, so a looser gate approved earlier bars and every arm sampled a
+    different set of setups. The tell was htf_sweep "either" -- strictly
+    looser than "both" -- reporting six FEWER auto-fires, which is impossible
+    for a gate that only ever admits more. That was the harness comparing
+    different trades, not the flag doing anything.
+    """
+    smc_cfg = config.get("smc", {})
     strategy = SMCStrategy(
         swing_lookback=config.get("swing_lookback", 5),
         order_block_lookback=config.get("order_block_lookback", 20),
@@ -83,8 +98,22 @@ def run_arm(df, config, *, extended, knowledge_on, sizing_on, index, balance, st
         reward_risk_ratio=config.get("reward_risk_ratio", 2.0),
         stop_loss_pct=config.get("stop_loss_pct"),
         extended_detectors=extended,
-        extended_max_adjust=config.get("smc", {}).get("extended_max_adjust", 0.10),
+        extended_max_adjust=smc_cfg.get("extended_max_adjust", 0.10),
     )
+    out = []
+    for i in range(WARMUP, len(df) - 1, step):
+        window = df.iloc[max(0, i - WARMUP):i]
+        htf = df.iloc[max(0, i - HTF_BARS * 4):i:4]
+        if len(window) < 50 or len(htf) < 20:
+            continue
+        sig = strategy.analyze(window, htf)
+        if sig.type is not SignalType.NONE:
+            out.append((i, sig, window, htf))
+    return out
+
+
+def run_arm(candidates, config, *, knowledge_on, sizing_on, index, balance, staged_usd,
+            sm=(SM_DIRECTION, SM_BULL, SM_BEAR), screen_overrides=None):
     screen_cfg = dict(config.get("screening", {}))
     screen_cfg.update(screen_overrides or {})
     screener = TradeScreener(ScreenConfig.from_dict(screen_cfg))
@@ -101,15 +130,7 @@ def run_arm(df, config, *, extended, knowledge_on, sizing_on, index, balance, st
         "final_pct_sum": 0.0, "risk_usd_sum": 0.0, "risk_usd_max": 0.0, "ceiling_hits": 0,
     }
 
-    for i in range(WARMUP, len(df)):
-        window = df.iloc[max(0, i - WARMUP):i]
-        htf = df.iloc[max(0, i - HTF_BARS * 4):i:4]
-        if len(window) < 50 or len(htf) < 20:
-            continue
-
-        signal = strategy.analyze(window, htf)
-        if signal.type is SignalType.NONE:
-            continue
+    for i, signal, window, htf in candidates:
         stats["signals"] += 1
 
         screen_result = screener.screen(signal, window, htf)
@@ -168,6 +189,7 @@ def main() -> None:
     ap.add_argument("--symbol", default="BTC/USDT")
     ap.add_argument("--timeframe", default="15m")
     ap.add_argument("--bars", type=int, default=3000)
+    ap.add_argument("--step", type=int, default=4, help="bars between candidate samples")
     ap.add_argument("--balance", type=float, default=6.12, help="live combined balance")
     ap.add_argument("--staged-usd", type=float, default=3.0)
     ap.add_argument("--cache", default="", help="CSV to cache/reuse fetched bars")
@@ -198,7 +220,7 @@ def main() -> None:
     print(f"Knowledge corpus: {'available' if index.available else 'NOT FOUND'}"
           + (f" ({index.document_count} docs, {len(index.weights)} modules)" if index.available else "")
           + f"\nBalance ${args.balance:.2f}, staged risk ${args.staged_usd:.2f}/trade, "
-            f"auto-fire threshold 90%\n")
+            f"auto-fire threshold {live_state_auto_fire():.0f}%\n")
 
     live_flags = dict(
         extended=config.get("smc", {}).get("extended_detectors", False),
@@ -225,11 +247,19 @@ def main() -> None:
     hdr = (f"{'arm':<26} {'sig':>5} {'appr':>5} {'AUTO':>5} {'queue':>6} "
            f"{'avg%':>7} {'avg$':>7} {'max$':>7} {'cap':>4}")
     print(hdr); print("-" * len(hdr))
+    # Collect ONCE, under the live extended-detector setting, then score that
+    # identical set under every arm. This is what makes the arms comparable.
+    candidates = collect_candidates(
+        df, config, extended=live_flags["extended"], step=args.step)
+    print(f"Candidate setups collected once: {len(candidates)} "
+          f"(every arm is scored against this same set)\n")
+
     base = None
     for name, kw, overrides in arms:
-        s = run_arm(df, config, index=index, balance=args.balance,
+        s = run_arm(candidates, config, index=index, balance=args.balance,
                     staged_usd=args.staged_usd, sm=sm,
-                    screen_overrides=overrides, **kw)
+                    screen_overrides=overrides,
+                    knowledge_on=kw["knowledge_on"], sizing_on=kw["sizing_on"])
         n = max(s["approved"], 1)
         row = (f"{name:<26} {s['signals']:>5} {s['approved']:>5} {s['auto_fire']:>5} "
                f"{s['queued']:>6} {s['final_pct_sum']/n:>7.2f} "
