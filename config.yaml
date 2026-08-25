@@ -183,3 +183,15 @@ position_sizing:
   # live they amplified instead, so the relative cap is pinned at parity.
   max_multiple: 1.0
   max_risk_usd: 5.0      # ...and never more than this many dollars, ever
+
+# --- Positions this bot did not place
+# The account is also traded by hand, and MT5 reports every position on it,
+# not just this bot's. Orders from here carry magic 770077 (bot/mt5/client.py's
+# BOT_MAGIC); anything else reads as "manual" -- a human, another EA, or a
+# copy-trade feed.
+#
+# true (default): manual positions count toward max_open_trades, and the bot
+# never opens on a symbol that already has one. It still manages only its own
+# positions -- it will not touch, modify, or close a manual trade.
+# false: the bot ignores them entirely and can stack on top of your trades.
+respect_manual_positions: true

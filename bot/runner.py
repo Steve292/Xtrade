@@ -96,6 +96,9 @@ def run_bot(config_path: str = "config.yaml") -> None:
     # knowledge confluence layer. Both OFF unless config.yaml turns them on;
     # with both off this loop behaves exactly as it did before they existed.
     sizing_cfg = config.get("position_sizing", {})
+    # Whether positions this bot did NOT place (manual trades, another EA, a
+    # copy-trade feed) constrain it. See the main loop for what it enforces.
+    respect_manual = config.get("respect_manual_positions", True)
     knowledge_cfg = config.get("knowledge", {})
     knowledge_index = knowledge_mod.KnowledgeIndex()
     if knowledge_cfg.get("enabled"):
@@ -111,6 +114,9 @@ def run_bot(config_path: str = "config.yaml") -> None:
                   "scoring will be skipped (no adjustment applied)")
 
     evm_dex: EVMDex | None = None
+    # The MT5 client, kept at this scope so the main loop can ask the account
+    # what is actually open. None for every other venue.
+    mt5_client = None
     # One entry per scanned symbol: its data source, executor, and (mt5 only)
     # the MT5Broker for lot-sizing off that symbol's own tick economics. Every
     # non-mt5 venue just runs a single-item watchlist — same loop either way.
@@ -146,6 +152,7 @@ def run_bot(config_path: str = "config.yaml") -> None:
                 terminal_path=os.getenv("MT5_TERMINAL_PATH", ""),
             )
             print(f"  MT5 Bridge: {host}:{port}")
+        mt5_client = client
         cent_divisor = 100.0 if config.get("mt5_cent_account") else 1.0
         mt5_symbols = config.get("mt5_watchlist") or [config.get("mt5_symbol", symbol)]
         for sym in mt5_symbols:
@@ -234,6 +241,40 @@ def run_bot(config_path: str = "config.yaml") -> None:
         try:
             open_count = sum(1 for item in watchlist if item["executor"].position is not None)
 
+            # What is open on the ACCOUNT, not just what this bot is tracking.
+            # Without this the bot is blind to trades it did not place: on an
+            # account also traded by hand, max_open_trades means "one BOT
+            # trade" rather than one trade, and the bot happily opens a second
+            # position on a symbol the operator is already in -- doubling the
+            # real exposure with neither side aware of the other.
+            #
+            # Positions are separated by magic (bot/mt5/client.py's BOT_MAGIC),
+            # so the bot still manages only its own; the manual ones constrain
+            # it without ever being touched by it.
+            manual_symbols: set = set()
+            if respect_manual and mt5_client is not None:
+                try:
+                    split = mt5_client.positions_split()
+                    manual = split["manual"]
+                    if manual:
+                        manual_symbols = {p["symbol"] for p in manual}
+                        # Manual positions count toward max_open_trades: the
+                        # limit is about total account exposure, not about how
+                        # many of them this bot happens to own.
+                        open_count += len(manual)
+                        desc = ", ".join(
+                            f"{p['symbol']} {p['side']} {p['volume']}" for p in manual
+                        )
+                        print(f"  [manual] {len(manual)} position(s) not placed by this bot: {desc}"
+                              f" — counted toward max_open_trades ({max_open_trades})")
+                except Exception as e:
+                    # Never trade MORE freely because this lookup failed. Treat
+                    # an unreadable account as "something may be open" and sit
+                    # the pass out rather than assume it is flat.
+                    print(f"  [manual] position lookup failed ({type(e).__name__}) — "
+                          f"skipping entries this pass rather than assuming a flat account")
+                    open_count = max(open_count, max_open_trades)
+
             # Global smart-money read (bot/unified_screen.py's second gate,
             # alongside the seven-gate structure screen below) — cached
             # 15 minutes (bot/market_snapshot.py) since it's market-wide, not
@@ -319,6 +360,10 @@ def run_bot(config_path: str = "config.yaml") -> None:
                     executor.check_exit(current_price)
 
                     if executor.position is not None or open_count >= max_open_trades:
+                        continue
+                    if sym in manual_symbols:
+                        print(f"[{sym}] skipped — a position not placed by this bot is open "
+                              f"on this symbol; not stacking on top of it")
                         continue
                     if combined_guard is not None and combined_guard.halted:
                         print(f"[{sym}] blocked by combined ledger: {combined_guard.halt_reason}")
