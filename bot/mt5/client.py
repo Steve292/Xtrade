@@ -44,6 +44,12 @@ class SymbolInfo:
     contract_size: float
 
 
+# Stamped on every order this bot sends, so its own positions can be told
+# apart from anything else on the account -- manual trades, another EA, a
+# copy-trade subscription. MT5 reports magic=0 for anything placed by hand.
+BOT_MAGIC = 770077
+
+
 class MT5Client:
     """Wrapper over a raw MetaTrader5-compatible client.
 
@@ -161,24 +167,43 @@ class MT5Client:
             "sl": float(sl),
             "tp": float(tp),
             "deviation": 20,
-            "magic": 770077,
+            "magic": BOT_MAGIC,
             "comment": comment[:31],
             "type_time": self._mt5.ORDER_TIME_GTC,
             "type_filling": self._mt5.ORDER_FILLING_IOC,
         }
         return self._mt5.order_send(request)
 
-    def get_position(self, symbol: str):
-        """Return the first open position for `symbol`, or None."""
+    def get_position(self, symbol: str, magic: int | None = BOT_MAGIC):
+        """First open position for `symbol`, or None.
+
+        Filtered to `magic` by default -- THIS BOT's positions only. Passing
+        magic=None returns whatever is first on the symbol regardless of who
+        opened it, which is almost never what a caller wants on an account
+        that is also traded by hand: a manual position on the same symbol
+        would otherwise read as the bot's own.
+        """
         positions = self._mt5.positions_get(symbol=symbol)
         if not positions:
             return None
+        if magic is not None:
+            positions = [p for p in positions if getattr(p, "magic", 0) == magic]
+            if not positions:
+                return None
         return positions[0]
 
     def all_positions(self) -> list[dict]:
-        """Every open position across all symbols, for account-wide reporting."""
+        """Every open position across all symbols, for account-wide reporting.
+
+        `magic` and `origin` are included so callers can separate this bot's
+        trades from everything else on the account. origin is "bot" when the
+        magic matches BOT_MAGIC and "manual" otherwise -- "manual" covering
+        anything this bot did not place, whether that was a human, another
+        EA, or a copy-trade feed.
+        """
         out = []
         for p in self._mt5.positions_get() or []:
+            magic = int(getattr(p, "magic", 0) or 0)
             out.append({
                 "symbol": p.symbol,
                 "side": "long" if p.type == 0 else "short",
@@ -188,8 +213,29 @@ class MT5Client:
                 "tp": float(p.tp),
                 "profit": float(p.profit),
                 "ticket": int(p.ticket),
+                "magic": magic,
+                "origin": "bot" if magic == BOT_MAGIC else "manual",
             })
         return out
+
+    def position_by_ticket(self, ticket: int):
+        """The open position with this exact ticket, or None.
+
+        Reconciliation must key on the ticket, not the symbol: "is there a
+        position on XAUUSDc" cannot answer "is MY position still open" on an
+        account carrying more than one position per symbol.
+        """
+        for p in self._mt5.positions_get() or []:
+            if int(p.ticket) == int(ticket):
+                return p
+        return None
+
+    def positions_split(self) -> dict:
+        """Open positions grouped by origin: {"bot": [...], "manual": [...]}."""
+        grouped = {"bot": [], "manual": []}
+        for pos in self.all_positions():
+            grouped[pos["origin"]].append(pos)
+        return grouped
 
     def closed_deals(self, days: int = 30) -> list[dict]:
         """Closing deals (realized P&L) over the trailing N days, most recent first."""

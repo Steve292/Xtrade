@@ -168,7 +168,22 @@ class MT5Broker:
     def _check_exit_live(self) -> bool:
         # SL/TP are attached to the order and enforced server-side. If the
         # position no longer exists, it was closed (SL/TP hit or manual).
-        still_open = self.client.get_position(self.symbol)
+        #
+        # Matched by TICKET, not by symbol. Asking "is there a position on
+        # this symbol" answers a different question on an account that also
+        # carries manual trades: a hand-placed position on the same symbol
+        # reads as this bot's own, so the bot never registers its real exit
+        # and stays stuck holding a position that closed long ago -- blocking
+        # every subsequent entry on that symbol. The ticket is the only thing
+        # that identifies THIS trade.
+        ticket = getattr(self.position, "ticket", None)
+        if ticket is not None:
+            still_open = self.client.position_by_ticket(ticket)
+        else:
+            # No ticket recorded (paper-mode carry-over or a fill whose result
+            # could not be parsed) -- fall back to the symbol lookup, which is
+            # now magic-filtered to this bot's own positions.
+            still_open = self.client.get_position(self.symbol)
         if still_open is not None:
             return False
         balance = self.client.account_balance()
