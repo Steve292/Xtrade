@@ -44,7 +44,7 @@ max_open_trades: 1
 # and a 0.5% stop on 15m BTC will be hit often. That is what a sniper entry
 # is — precise entry, tight invalidation, frequent small losses paid for by
 # the 1:2 winners. Set back to 0.20 to revert.
-stop_loss_pct: null
+stop_loss_pct: 0.15
 
 # Staged fixed-dollar risk per trade, overriding risk_per_trade_pct above
 # when enabled — set at explicit user request: $3/trade while combined
@@ -112,11 +112,16 @@ screening:
   min_confidence: 0.55     # SMC confluence score floor
   min_rr: 2.0              # minimum reward:risk
   sniper_confidence: 0.65  # confidence required for a "sniper" entry
-  # Back to 0.02 now that stops are structural again. At 0.25 this gate could
-  # not fail on stop distance — every stop was 20% and the ceiling 25%, so the
-  # Sniper check was not gating anything. 2% admits 87% of the measured
-  # structural stops while rejecting the outliers (p95 sits at 25%).
-  max_stop_pct: 0.02
+  # MUST stay above stop_loss_pct or the Sniper gate rejects every trade.
+  # stop_loss_pct is back to a fixed 0.15, so 0.02 would fail on stop distance
+  # for 100% of setups — the bot would scan forever and never approve anything.
+  # 0.20 leaves headroom above the 15% stop.
+  #
+  # Note what this costs: with every stop fixed at 15% and the ceiling at 20%,
+  # the Sniper check can no longer fail on stop distance, so it stops gating
+  # that dimension — the same toothlessness the 0.25/0.20 pairing had. It
+  # still gates on sniper_confidence.
+  max_stop_pct: 0.20
   # Require a market-structure shift (BOS or CHoCH) in the signal's own
   # direction before a trade is approved, at explicit user request. The
   # strategy already SCORES a recent break as confluence, but scoring is not
