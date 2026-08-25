@@ -241,4 +241,7 @@ trade_grades_path: trade_grades.json
 # so both reach 100% when fully agreed and one threshold means one thing.
 # false (default): the original /9 scoring, kept as the default because this
 # changes final_pct and final_pct decides unattended firing.
-normalise_smart_money_by_direction: false
+# ON at explicit user request: "enforce best threshold for both shorts and
+# longs cleanly". Without it a short cannot cross a 75% threshold at any
+# confidence, so the bot was long-only by arithmetic rather than by choice.
+normalise_smart_money_by_direction: true
