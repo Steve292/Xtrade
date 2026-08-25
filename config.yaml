@@ -101,6 +101,23 @@ screening:
   ote_high: 0.786
   liquidity_tolerance_pct: 0.0005  # equal-high/low tolerance for liquidity pools
   sweep_bars: 20           # a liquidity sweep must be this recent to confirm
+  # --- liquidity quality, all OFF (each changes which setups pass)
+  # htf_sweep: also read the sweep on higher_timeframe. The gate has only ever
+  # looked at the entry timeframe, so the 4h stop-hunt -- the more significant
+  # of the two -- was computed nowhere and influenced nothing.
+  # require_both: true is STRICTER than today (both timeframes must confirm);
+  # false is LOOSER and would approve setups the current gate rejects.
+  htf_sweep: false
+  htf_sweep_bars: 10
+  htf_sweep_require_both: true
+  # merge_pools: collapse duplicate levels. Every matching PAIR of bars
+  # currently emits its own pool, so one level touched 5 times yields 10
+  # near-identical entries -- why a 200-bar gold frame reports 343 "pools".
+  merge_pools: false
+  # require_reclaim: a level counts as swept only if price wicked through and
+  # CLOSED back. Without it "swept" also means a clean break -- price closing
+  # through and continuing, which is the opposite of a stop-hunt that reverses.
+  require_reclaim: false
 
 # Capital guard — daily-loss / drawdown circuit breaker + concurrent-risk caps.
 # Checked right before a --live order is sent; once halted it blocks new

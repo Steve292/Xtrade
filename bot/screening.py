@@ -71,6 +71,21 @@ class ScreenConfig:
     swing_lookback: int = 5
     liquidity_tolerance_pct: float = 0.0005  # equal-high/low tolerance for pools
     sweep_bars: int = 20  # a liquidity sweep must be this recent to confirm
+    # Also read the sweep on the HIGHER timeframe. The gate has only ever
+    # looked at the entry timeframe, so a 4h stop-hunt -- the more significant
+    # of the two -- was computed nowhere and influenced nothing.
+    # OFF: the check reports LTF only, exactly as before.
+    htf_sweep: bool = False
+    htf_sweep_bars: int = 10  # recency window on the HTF's own bars
+    # When htf_sweep is on: require BOTH timeframes to confirm, or accept
+    # either. Requiring both is strictly stricter than today; accepting either
+    # is strictly looser, and would approve setups the current gate rejects.
+    htf_sweep_require_both: bool = True
+    # Merge duplicate pool levels and require a reclaim (wick through, close
+    # back) before a level counts as swept. Both default off: they change
+    # which setups pass, and that belongs behind a flag.
+    merge_pools: bool = False
+    require_reclaim: bool = False
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
@@ -108,14 +123,31 @@ class TradeScreener:
 
         # 3. Liquidity sweep — a stop-hunt in the trade direction must be confirmed
         #    (long needs sell-side liquidity swept; short needs buy-side swept)
-        pools = detect_liquidity_pools(df, cfg.liquidity_tolerance_pct)
+        pools = detect_liquidity_pools(
+            df, cfg.liquidity_tolerance_pct,
+            merge=cfg.merge_pools, require_reclaim=cfg.require_reclaim,
+        )
         sweep = recent_sweep(pools, df, bars=cfg.sweep_bars)
         want_side = "sell_side" if direction == "long" else "buy_side"
-        swept = sweep is not None and sweep.kind == want_side
-        checks.append(Check(
-            "Liquidity sweep", swept,
-            f"{sweep.kind if sweep else 'none'} (need {want_side})",
-        ))
+        ltf_swept = sweep is not None and sweep.kind == want_side
+        detail = f"{sweep.kind if sweep else 'none'} (need {want_side})"
+        swept = ltf_swept
+
+        if cfg.htf_sweep and htf_df is not None and len(htf_df) >= 20:
+            htf_pools = detect_liquidity_pools(
+                htf_df, cfg.liquidity_tolerance_pct,
+                merge=cfg.merge_pools, require_reclaim=cfg.require_reclaim,
+            )
+            htf_sweep = recent_sweep(htf_pools, htf_df, bars=cfg.htf_sweep_bars)
+            htf_swept = htf_sweep is not None and htf_sweep.kind == want_side
+            swept = (ltf_swept and htf_swept) if cfg.htf_sweep_require_both \
+                else (ltf_swept or htf_swept)
+            detail = (f"LTF {sweep.kind if sweep else 'none'} / "
+                      f"HTF {htf_sweep.kind if htf_sweep else 'none'} "
+                      f"(need {want_side}, "
+                      f"{'both' if cfg.htf_sweep_require_both else 'either'})")
+
+        checks.append(Check("Liquidity sweep", swept, detail))
 
         # 4. Risk management — reward:risk and a valid stop
         risk = abs(signal.entry - signal.stop_loss)
