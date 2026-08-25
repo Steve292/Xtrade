@@ -145,6 +145,13 @@ def run_arm(candidates, config, *, knowledge_on, sizing_on, index, balance, stag
                 signal, screen_result, sm[0], sm[1], sm[2],
             knowledge_result=kr,
             knowledge_max_adjust_pct=config.get("knowledge", {}).get("max_adjust_pct", 5.0),
+            # Must mirror the live loop. Without this the harness scored
+            # agreement /9 while the bot scored it per-direction, so every
+            # measured final_pct was ~11 points below what the bot computes --
+            # and the AUTO column reported a threshold that was unreachable
+            # only in the harness.
+            normalise_by_direction=config.get(
+                "normalise_smart_money_by_direction", False),
         )
         if not unified.approved:
             continue
@@ -241,8 +248,12 @@ def main() -> None:
 
     n_agree = max(0, min(9, args.sm_agreement))
     sm = (("BULLISH" if n_agree else "NEUTRAL"), n_agree, 0)
-    print(f"Smart money held at {sm[0]} with {n_agree}/9 modules agreeing "
-          f"(final_pct ceiling ~{(100 + n_agree / 9 * 100) / 2:.0f}%)\n")
+    from bot.unified_screen import MAX_BEARISH_MODULES, MAX_BULLISH_MODULES
+    norm = config.get("normalise_smart_money_by_direction", False)
+    denom = MAX_BULLISH_MODULES if norm else 9
+    print(f"Smart money held at {sm[0]} with {n_agree}/9 modules agreeing"
+          f" | scoring {'per-direction' if norm else '/9'}"
+          f" -> LONG final_pct ceiling ~{(100 + min(100, n_agree / denom * 100)) / 2:.0f}%\n")
 
     hdr = (f"{'arm':<26} {'sig':>5} {'appr':>5} {'AUTO':>5} {'queue':>6} "
            f"{'avg%':>7} {'avg$':>7} {'max$':>7} {'cap':>4}")
