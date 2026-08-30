@@ -50,3 +50,8 @@ knowledge_channels.json
 # Realised-outcome grading store (bot/trade_grades.py) — this account's own
 # closed trades, not source.
 trade_grades.json
+
+# Hourly SMC analysis output (bot/hourly_report.py / scripts/hourly_analysis.py)
+logs/hourly_analysis.log
+logs/hourly-analysis-launchd.log
+hourly_analysis_latest.json
