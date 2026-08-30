@@ -107,6 +107,7 @@ class SMCStrategy:
         stop_loss_pct: float | None = None,
         extended_detectors: bool = False,
         extended_max_adjust: float = 0.10,
+        htf_neutral_credit: float = 0.0,
     ):
         self.swing_lookback = swing_lookback
         self.order_block_lookback = order_block_lookback
@@ -140,6 +141,22 @@ class SMCStrategy:
         # quietly raise the hands-off firing rate.
         self.extended_detectors = extended_detectors
         self.extended_max_adjust = extended_max_adjust
+        # Confluence credit for a NEUTRAL HTF read, at explicit user request.
+        # Default 0.0 preserves today's behaviour exactly: today, HTF neutral
+        # earns nothing toward the +0.25 htf_trend bonus below -- the same as
+        # an outright OPPOSING HTF earns nothing. That parity is real: neither
+        # bullish nor bearish confirmed means the HTF layer offers no opinion,
+        # which is worth less than a confirmed match but is not the same as
+        # active disagreement.
+        #
+        # Clamped to [0, 0.25): capped below the full bullish/bearish bonus so
+        # "no opinion" can never outscore a genuinely confirmed HTF trend --
+        # that would make silence more valuable than confirmation, which is
+        # backwards. This is a scoring ADDITION, not a gate being loosened:
+        # TradeScreener's Top-down alignment check already passes on neutral
+        # HTF (it only rejects a DIRECTLY OPPOSING one), so there was no
+        # existing restriction on neutral to relax here.
+        self.htf_neutral_credit = max(0.0, min(0.2499, htf_neutral_credit))
 
     def analyze(self, df: pd.DataFrame, htf_df: pd.DataFrame | None = None) -> Signal:
         if len(df) < 50:
@@ -276,6 +293,9 @@ class SMCStrategy:
         if htf_trend == Trend.BULLISH:
             score += 0.25
             reasons.append("HTF bullish")
+        elif htf_trend == Trend.NEUTRAL and self.htf_neutral_credit > 0:
+            score += self.htf_neutral_credit
+            reasons.append(f"HTF neutral (+{self.htf_neutral_credit:.2f} partial credit)")
 
         if trend == Trend.BULLISH:
             score += 0.15
@@ -344,6 +364,9 @@ class SMCStrategy:
         if htf_trend == Trend.BEARISH:
             score += 0.25
             reasons.append("HTF bearish")
+        elif htf_trend == Trend.NEUTRAL and self.htf_neutral_credit > 0:
+            score += self.htf_neutral_credit
+            reasons.append(f"HTF neutral (+{self.htf_neutral_credit:.2f} partial credit)")
 
         if trend == Trend.BEARISH:
             score += 0.15

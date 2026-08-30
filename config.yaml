@@ -171,6 +171,16 @@ capital_guard:
 smc:
   extended_detectors: true
   extended_max_adjust: 0.10
+  # Confluence credit for a NEUTRAL HTF read, at explicit user request. 0.0
+  # (default, unchanged) means neutral earns nothing toward the +0.25
+  # htf_trend bonus SMCStrategy awards for a CONFIRMED bullish/bearish HTF --
+  # today, that is identical to what an outright OPPOSING HTF earns: zero.
+  # This is a scoring ADDITION, not a gate being loosened -- TradeScreener's
+  # Top-down alignment check already passes on neutral HTF (it only rejects a
+  # DIRECTLY OPPOSING one), so there was no existing restriction on neutral to
+  # relax. Clamped in code to [0, 0.25): capped below the full bonus so "no
+  # opinion" can never outscore a genuinely confirmed HTF trend.
+  htf_neutral_credit: 0.0
 
 # --- Knowledge confluence (bot/knowledge.py)
 # Scores a live setup against the ingested transcript corpus (~1000 documents),

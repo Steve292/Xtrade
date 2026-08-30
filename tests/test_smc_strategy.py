@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bot.smc.liquidity import LiquidityPool
 from bot.smc.order_blocks import OrderBlock
 from bot.smc.strategy import SignalType, SMCStrategy
-from bot.smc.structure import StructureEvent, Trend
+from bot.smc.structure import StructureEvent, Trend, detect_trend, find_swing_points
 from bot.smc.supply_demand import SupplyDemandZone
 
 # A fully-confluent long: HTF+LTF bullish, a recent bullish BOS, a swept
@@ -229,3 +229,64 @@ def test_signals_report_the_detectors_that_produced_them():
 def test_no_signal_reports_no_detectors():
     empty = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
     assert SMCStrategy().analyze(empty).detectors == ()
+
+
+# --- htf_neutral_credit: partial confluence credit for a NEUTRAL HTF read ---
+# Not a gate loosened (TradeScreener's Top-down alignment already passes on
+# neutral) -- a scoring addition. Neutral currently earns the SAME as an
+# outright OPPOSING HTF: zero. Default 0.0 preserves that; a positive value
+# gives neutral partial credit, capped below the full +0.25 confirmed-trend
+# bonus so silence can never outscore confirmation.
+
+
+def test_htf_neutral_credit_defaults_to_zero():
+    assert SMCStrategy().htf_neutral_credit == 0.0
+
+
+def test_htf_neutral_credit_is_clamped_below_the_confirmed_trend_bonus():
+    """0.25 is the full bullish/bearish bonus. Neutral must never reach it --
+    that would make 'no opinion' as valuable as a confirmed HTF trend."""
+    assert SMCStrategy(htf_neutral_credit=0.25).htf_neutral_credit < 0.25
+    assert SMCStrategy(htf_neutral_credit=1.0).htf_neutral_credit < 0.25
+    assert SMCStrategy(htf_neutral_credit=-5.0).htf_neutral_credit == 0.0
+
+
+def test_zero_credit_is_bit_identical_to_the_original_behaviour():
+    """Flag-off parity: htf_neutral_credit=0.0 (the default) must reproduce
+    exactly what the strategy did before this existed."""
+    for seed in range(60):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        off = SMCStrategy().analyze(df, htf)
+        explicit = SMCStrategy(htf_neutral_credit=0.0).analyze(df, htf)
+        assert off.confidence == explicit.confidence
+        assert off.type == explicit.type
+
+
+def test_positive_credit_never_lowers_confidence():
+    """Partial credit is strictly additive on a neutral HTF read -- it must
+    never reduce a score relative to the zero-credit baseline."""
+    for seed in range(60):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        off = SMCStrategy().analyze(df, htf)
+        on = SMCStrategy(htf_neutral_credit=0.10).analyze(df, htf)
+        if off.type is SignalType.NONE or on.type is SignalType.NONE:
+            continue
+        if off.type == on.type:
+            assert on.confidence >= off.confidence - 1e-9
+
+
+def test_credit_only_applies_when_htf_actually_reads_neutral():
+    """A confirmed HTF trend must still score its full 0.25 -- the credit
+    must not be added ON TOP of a real bullish/bearish match."""
+    for seed in range(60):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        hs = find_swing_points(htf, 5)
+        if detect_trend(hs) == Trend.NEUTRAL:
+            continue  # only care about bars where HTF is confirmed one way
+        off = SMCStrategy().analyze(df, htf)
+        on = SMCStrategy(htf_neutral_credit=0.20).analyze(df, htf)
+        if off.type is SignalType.NONE or on.type is SignalType.NONE:
+            continue
+        if off.type == on.type:
+            assert abs(on.confidence - off.confidence) < 1e-9, \
+                "credit leaked into a bar with a CONFIRMED (non-neutral) HTF trend"

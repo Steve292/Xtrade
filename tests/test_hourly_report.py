@@ -31,30 +31,41 @@ def _base(**kw) -> SymbolSnapshot:
     return SymbolSnapshot(**defaults)
 
 
-# --- no-signal expectations point at the right structural gap ---------------
+# --- no-signal expectation defers to the strategy's own diagnosis -----------
+# An earlier version RE-DERIVED an explanation from a fixed priority order
+# (HTF neutral -> LTF disagreement -> no sweep -> no zone), independent of
+# what SMCStrategy actually computed. On a real bar where HTF read neutral but
+# the true blocker was a missing supply/demand zone, it printed "HTF neutral
+# blocks everything downstream" -- plausible, and wrong, because it never
+# consulted signal_reason (SMCStrategy._diagnose's own text). Repeating that
+# text verbatim is the fix: it cannot diverge from what the strategy computed,
+# because it IS what the strategy computed.
 
 
-def test_neutral_htf_blames_the_htf_bias():
-    r = build_symbol_report(_base(htf_trend="neutral", ltf_trend="neutral"))
-    assert "HTF bias is neutral" in r or "bias is neutral" in r
+def test_no_signal_expectation_is_exactly_the_strategys_own_reason():
+    reason = "No setup: price outside the dealing range, no supply/demand zones formed"
+    r = build_symbol_report(_base(htf_trend="neutral", ltf_trend="bullish", signal_reason=reason))
+    assert reason in r.split("Expectation:")[1]
 
 
-def test_htf_ltf_disagreement_is_named():
-    r = build_symbol_report(_base(htf_trend="bullish", ltf_trend="bearish"))
-    assert "hasn't aligned" in r
-    assert "bullish" in r  # names which direction the LTF needs to match
+def test_no_signal_expectation_does_not_blame_neutral_htf_when_thats_not_the_reason():
+    """Regression for the exact bug: HTF neutral must not be named as the
+    blocker when the real diagnosis names something else entirely."""
+    reason = "No setup: price outside the dealing range, no supply/demand zones formed"
+    r = build_symbol_report(_base(htf_trend="neutral", ltf_trend="bullish", signal_reason=reason))
+    expectation = r.split("Expectation:")[1]
+    assert "blocks everything downstream" not in expectation
+    assert "HTF" not in expectation or "neutral" not in expectation.lower()
 
 
-def test_missing_sweep_is_named_when_structure_agrees():
-    r = build_symbol_report(_base(htf_trend="bullish", ltf_trend="bullish", sweep=None))
-    assert "liquidity has been swept" in r
-
-
-def test_zone_gap_is_the_last_resort_explanation():
-    r = build_symbol_report(_base(
-        htf_trend="bullish", ltf_trend="bullish",
-        sweep="sell_side @ 78,900 (3 bars ago)"))
-    assert "demand/supply zone" in r
+def test_no_signal_expectation_tracks_whatever_the_strategy_actually_says():
+    for reason in (
+        "No setup: ranging (no clear trend)",
+        "No setup: choppy LTF structure",
+        "No setup: HTF bullish vs LTF bearish conflict",
+    ):
+        r = build_symbol_report(_base(signal_reason=reason))
+        assert reason in r
 
 
 # --- signal-present expectations point at the first failing gate ------------

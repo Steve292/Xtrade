@@ -71,6 +71,7 @@ def run_bot(config_path: str = "config.yaml") -> None:
         stop_loss_pct=config.get("stop_loss_pct"),
         extended_detectors=config.get("smc", {}).get("extended_detectors", False),
         extended_max_adjust=config.get("smc", {}).get("extended_max_adjust", 0.10),
+        htf_neutral_credit=config.get("smc", {}).get("htf_neutral_credit", 0.0),
     )
     # Same seven-gate screen the Hyperliquid path (hypertrade.py) has always
     # required — this loop previously entered on the raw SMC signal alone

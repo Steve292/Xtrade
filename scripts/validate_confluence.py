@@ -99,6 +99,7 @@ def collect_candidates(df, config, *, extended, step=4):
         stop_loss_pct=config.get("stop_loss_pct"),
         extended_detectors=extended,
         extended_max_adjust=smc_cfg.get("extended_max_adjust", 0.10),
+        htf_neutral_credit=smc_cfg.get("htf_neutral_credit", 0.0),
     )
     out = []
     for i in range(WARMUP, len(df) - 1, step):

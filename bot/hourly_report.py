@@ -62,20 +62,15 @@ def _expectation(snap: SymbolSnapshot) -> str:
     Built from the same structural facts the gates check, not from the
     generic reason text -- this is the forward-looking half."""
     if snap.signal_type == "none":
-        # No confluence at all yet: name the biggest structural gap.
-        if snap.htf_trend == "neutral":
-            return (f"The {snap.htf_label} bias is neutral, which blocks everything "
-                    f"downstream -- a directional HTF trend has to establish first.")
-        if snap.ltf_trend == "neutral" or snap.ltf_trend != snap.htf_trend:
-            return (f"{snap.htf_label} bias is {snap.htf_trend}, but the {snap.ltf_label} "
-                    f"structure hasn't aligned yet. Needs a {snap.htf_trend} "
-                    f"BOS/CHoCH on the {snap.ltf_label} to bring the two into agreement.")
-        if snap.sweep is None:
-            return (f"Structure agrees ({snap.htf_trend} on both timeframes), but no "
-                    f"liquidity has been swept recently -- needs a stop-hunt through a "
-                    f"prior high/low before a setup can form.")
-        return ("Structure and liquidity are in place, but price hasn't reached a "
-                "demand/supply zone yet -- watching for a pullback into one.")
+        # Defer to the strategy's own diagnosis rather than re-deriving one.
+        # An earlier version guessed from a fixed priority order (HTF neutral
+        # -> LTF disagreement -> no sweep -> no zone) and got it wrong: on a
+        # bar where HTF read neutral but the REAL blocker was a missing
+        # supply/demand zone, it reported "HTF neutral blocks everything" --
+        # a plausible-sounding sentence that didn't match what the strategy
+        # actually computed. signal_reason IS that computation
+        # (SMCStrategy._diagnose); repeating it can't diverge from it.
+        return snap.signal_reason
 
     # There IS a signal. Point at the first failing gate, if any.
     failing = next((g for g in snap.gate_checks if not g[1]), None)
