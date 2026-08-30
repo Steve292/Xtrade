@@ -34,6 +34,7 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 
+from bot import knowledge as knowledge_mod
 from bot import live_state
 from bot.capital_guard import CapitalGuard
 from bot.combined_ledger import fetch_combined_balance
@@ -133,6 +134,14 @@ def _trader(client: HyperliquidClient) -> HyperliquidTrader:
         liquidity_tolerance_pct=CFG.get("liquidity_tolerance_pct", 0.0005),
         reward_risk_ratio=CFG.get("reward_risk_ratio", 2.0),
         stop_loss_pct=CFG.get("stop_loss_pct"),
+        # Matched to the live loop -- this docstring's own claim ("sizes
+        # identically to what the autonomous loop would have done") was false
+        # without these: a manual Fire from here was computing confidence
+        # with the PRE-extended-detector strategy while hypertrade.py traded
+        # with the extended one, on the same bar.
+        extended_detectors=CFG.get("smc", {}).get("extended_detectors", False),
+        extended_max_adjust=CFG.get("smc", {}).get("extended_max_adjust", 0.10),
+        htf_neutral_credit=CFG.get("smc", {}).get("htf_neutral_credit", 0.0),
     )
     screener = TradeScreener(ScreenConfig.from_dict(CFG.get("screening", {})))
     guard_cfg = CFG.get("capital_guard", {})
@@ -166,6 +175,30 @@ def _trader(client: HyperliquidClient) -> HyperliquidTrader:
         risk_pct=risk_pct,
         leverage=HL_CFG.get("default_leverage", 3),
         capital_guard=guard,
+        # Matched to hypertrade.py -- without these a manual Fire from this
+        # dashboard scored knowledge/direction-fairness differently (in
+        # practice: not at all) than the autonomous loop would have.
+        knowledge_index=_knowledge_index(),
+        knowledge_max_adjust_pct=CFG.get("knowledge", {}).get("max_adjust_pct", 5.0),
+        normalise_smart_money_by_direction=CFG.get(
+            "normalise_smart_money_by_direction", False),
+    )
+
+
+def _knowledge_index():
+    """Same construction as bot/runner.py and hypertrade.py: an empty,
+    unavailable index when knowledge.enabled is false, so both callers below
+    behave exactly as before this existed. build_index() disk-caches keyed on
+    the corpus's own mtime (confirmed ~0.2ms on a cache hit), so calling this
+    per-request rather than holding a module-level cache is cheap and avoids
+    a long-running dashboard process serving a stale index after the corpus
+    is re-ingested."""
+    kcfg = CFG.get("knowledge", {})
+    if not kcfg.get("enabled"):
+        return knowledge_mod.KnowledgeIndex()
+    return knowledge_mod.build_index(
+        kcfg.get("corpus_path", knowledge_mod.DEFAULT_CORPUS_PATH),
+        kcfg.get("cache_path", knowledge_mod.DEFAULT_CACHE_PATH),
     )
 
 
@@ -631,12 +664,19 @@ def _scan_mt5_rows() -> list[dict]:
         liquidity_tolerance_pct=CFG.get("liquidity_tolerance_pct", 0.0005),
         reward_risk_ratio=CFG.get("reward_risk_ratio", 2.0),
         stop_loss_pct=CFG.get("stop_loss_pct"),
+        # Matched to the live loop -- this function's own docstring claims
+        # this "reflects what the live bot would actually do, not a stricter
+        # preview of it", which was false without these three.
+        extended_detectors=CFG.get("smc", {}).get("extended_detectors", False),
+        extended_max_adjust=CFG.get("smc", {}).get("extended_max_adjust", 0.10),
+        htf_neutral_credit=CFG.get("smc", {}).get("htf_neutral_credit", 0.0),
     )
     screener = TradeScreener(ScreenConfig.from_dict(CFG.get("screening", {})))
     ltf = CFG.get("mt5_timeframe", CFG.get("timeframe", "15m"))
     htf = CFG.get("higher_timeframe", "1h")
     symbols = CFG.get("mt5_watchlist") or [CFG.get("mt5_symbol", "EURUSDc")]
     sm_direction, sm_bullish, sm_bearish = _get_smart_money()
+    mt5_knowledge_index = _knowledge_index()
 
     out = []
     for symbol in symbols:
@@ -650,7 +690,16 @@ def _scan_mt5_rows() -> list[dict]:
                 out.append(row)
                 continue
             result = screener.screen(signal, df, htf_df)
-            unified = evaluate_unified(signal, result, sm_direction, sm_bullish, sm_bearish)
+            kr = (
+                knowledge_mod.score_signal(signal.detectors, mt5_knowledge_index)
+                if mt5_knowledge_index.available else None
+            )
+            unified = evaluate_unified(
+                signal, result, sm_direction, sm_bullish, sm_bearish,
+                knowledge_result=kr,
+                knowledge_max_adjust_pct=CFG.get("knowledge", {}).get("max_adjust_pct", 5.0),
+                normalise_by_direction=CFG.get("normalise_smart_money_by_direction", False),
+            )
             if unified.approved:
                 row.update(
                     status="approved", side=signal.type.value, confidence=signal.confidence,

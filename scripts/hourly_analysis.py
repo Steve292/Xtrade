@@ -123,6 +123,7 @@ def main() -> None:
         reward_risk_ratio=cfg["reward_risk_ratio"], stop_loss_pct=cfg.get("stop_loss_pct"),
         extended_detectors=cfg.get("smc", {}).get("extended_detectors", False),
         extended_max_adjust=cfg.get("smc", {}).get("extended_max_adjust", 0.10),
+        htf_neutral_credit=cfg.get("smc", {}).get("htf_neutral_credit", 0.0),
     )
     screener = TradeScreener(ScreenConfig.from_dict(cfg.get("screening", {})))
     kcfg = cfg.get("knowledge", {})

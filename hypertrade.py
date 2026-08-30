@@ -142,8 +142,28 @@ def main() -> None:
         liquidity_tolerance_pct=cfg.get("liquidity_tolerance_pct", 0.0005),
         reward_risk_ratio=cfg.get("reward_risk_ratio", 2.0),
         stop_loss_pct=cfg.get("stop_loss_pct"),
+        extended_detectors=cfg.get("smc", {}).get("extended_detectors", False),
+        extended_max_adjust=cfg.get("smc", {}).get("extended_max_adjust", 0.10),
+        htf_neutral_credit=cfg.get("smc", {}).get("htf_neutral_credit", 0.0),
     )
     screener = TradeScreener(ScreenConfig.from_dict(cfg.get("screening", {})))
+    # Knowledge confluence and direction-fair smart-money scoring, at parity
+    # with bot/runner.py's MT5 loop. Previously absent from this venue
+    # entirely (HyperliquidTrader had no parameter for either), which meant
+    # a maximally-agreed short here could never cross an auto-fire threshold
+    # above 72.2% no matter how good the setup was -- the same asymmetry bug
+    # fixed for MT5, silently still live on Hyperliquid.
+    from bot import knowledge as knowledge_mod
+    knowledge_cfg = cfg.get("knowledge", {})
+    knowledge_index = knowledge_mod.KnowledgeIndex()
+    if knowledge_cfg.get("enabled"):
+        knowledge_index = knowledge_mod.build_index(
+            knowledge_cfg.get("corpus_path", knowledge_mod.DEFAULT_CORPUS_PATH),
+            knowledge_cfg.get("cache_path", knowledge_mod.DEFAULT_CACHE_PATH),
+        )
+        if knowledge_index.available:
+            print(f"  Knowledge: {len(knowledge_index.weights)} modules weighted "
+                  f"from {knowledge_index.document_count} documents")
     # Staged fixed-dollar risk (config.yaml's fixed_risk_usd) overrides
     # trader.risk_pct below when enabled — same mechanism bot/runner.py
     # uses for MT5, recomputed every pass from the live combined balance.
@@ -174,7 +194,11 @@ def main() -> None:
                   f"— guard runs on Hyperliquid balance alone, retrying each pass")
 
     trader = HyperliquidTrader(client, strategy, screener, risk_pct=args.risk, leverage=args.lev,
-                                capital_guard=capital_guard, combined_guard=combined_guard)
+                                capital_guard=capital_guard, combined_guard=combined_guard,
+                                knowledge_index=knowledge_index,
+                                knowledge_max_adjust_pct=knowledge_cfg.get("max_adjust_pct", 5.0),
+                                normalise_smart_money_by_direction=cfg.get(
+                                    "normalise_smart_money_by_direction", False))
 
     watch = None
     if args.watchlist:

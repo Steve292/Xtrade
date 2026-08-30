@@ -112,6 +112,9 @@ class HyperliquidTrader:
         max_notional_pct: float = 100.0,  # cap position notional at N% of buying power
         capital_guard: CapitalGuard | None = None,
         combined_guard: CapitalGuard | None = None,
+        knowledge_index=None,
+        knowledge_max_adjust_pct: float = 5.0,
+        normalise_smart_money_by_direction: bool = False,
     ):
         self.client = client
         self.strategy = strategy
@@ -121,6 +124,20 @@ class HyperliquidTrader:
         self.max_notional_pct = max_notional_pct
         self.capital_guard = capital_guard
         self.combined_guard = combined_guard
+        # Knowledge confluence and direction-fair smart-money scoring, at
+        # parity with bot/runner.py's MT5 loop (see that file's own wiring).
+        # Both defaulted OFF/inert: knowledge_index=None means score_signal is
+        # never called (see evaluate_many below), and
+        # normalise_smart_money_by_direction=False reproduces the exact
+        # scoring this class already used before either existed. This
+        # constructor previously accepted neither, so this venue's shorts
+        # were scored against all 9 smart-money modules while only 4 can ever
+        # vote SELL -- capping a maximally-agreed short at final_pct 72.2%,
+        # unreachable past any auto-fire threshold above that, with no config
+        # able to fix it because the parameter didn't exist here at all.
+        self.knowledge_index = knowledge_index
+        self.knowledge_max_adjust_pct = knowledge_max_adjust_pct
+        self.normalise_smart_money_by_direction = normalise_smart_money_by_direction
         self._tracked: dict[str, dict] = {}  # coin -> {side, entry, stop_loss, take_profit}
 
     def guard_check(self, account_value: float, confidence: float | None = None) -> tuple[bool, str | None]:
@@ -240,8 +257,16 @@ class HyperliquidTrader:
             raise RuntimeError(f"no candles for {coin} (Hyperliquid and Binance both unavailable)")
         signal = self.strategy.analyze(df, htf_df)
         result = self.screener.screen(signal, df, htf_df)
+        knowledge_result = None
+        if (self.knowledge_index is not None and self.knowledge_index.available
+                and signal.type != SignalType.NONE):
+            from bot import knowledge as knowledge_mod
+            knowledge_result = knowledge_mod.score_signal(signal.detectors, self.knowledge_index)
         unified = evaluate_unified(
-            signal, result, smart_money_direction, smart_money_bullish_count, smart_money_bearish_count
+            signal, result, smart_money_direction, smart_money_bullish_count, smart_money_bearish_count,
+            knowledge_result=knowledge_result,
+            knowledge_max_adjust_pct=self.knowledge_max_adjust_pct,
+            normalise_by_direction=self.normalise_smart_money_by_direction,
         )
         plan = self._plan(coin, signal, account_value, withdrawable) if unified.approved else None
         return signal, result, plan, unified

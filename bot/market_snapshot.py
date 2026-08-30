@@ -208,6 +208,17 @@ def compute_snapshot(cfg: dict | None = None) -> dict:
                 fvg_min_size_pct=cfg.get("fvg_min_size_pct", 0.001),
                 liquidity_tolerance_pct=cfg.get("liquidity_tolerance_pct", 0.0005),
                 reward_risk_ratio=cfg.get("reward_risk_ratio", 2.0),
+                # extended_detectors/htf_neutral_credit matched to the live
+                # loop: this signal.type feeds smc_fib_signal below, which
+                # feeds the smart-money vote evaluate_unified scores real
+                # trades against -- htf_neutral_credit in particular can
+                # change signal.type (NONE -> LONG/SHORT) at the confluence
+                # margin, not just confidence, so drift here would make the
+                # "second opinion" disagree with the primary signal for
+                # reasons that are really just config skew.
+                extended_detectors=cfg.get("smc", {}).get("extended_detectors", False),
+                extended_max_adjust=cfg.get("smc", {}).get("extended_max_adjust", 0.10),
+                htf_neutral_credit=cfg.get("smc", {}).get("htf_neutral_credit", 0.0),
             )
             smc_signal_type = strategy.analyze(btc_candles, htf_candles).type.value
         except Exception:
@@ -339,6 +350,9 @@ def compute_snapshot(cfg: dict | None = None) -> dict:
             fvg_min_size_pct=cfg.get("fvg_min_size_pct", 0.001),
             liquidity_tolerance_pct=cfg.get("liquidity_tolerance_pct", 0.0005),
             reward_risk_ratio=cfg.get("reward_risk_ratio", 2.0),
+            extended_detectors=cfg.get("smc", {}).get("extended_detectors", False),
+            extended_max_adjust=cfg.get("smc", {}).get("extended_max_adjust", 0.10),
+            htf_neutral_credit=cfg.get("smc", {}).get("htf_neutral_credit", 0.0),
         )
         for symbol in cfg.get("mt5_watchlist") or []:
             try:

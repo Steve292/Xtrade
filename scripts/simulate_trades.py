@@ -45,7 +45,8 @@ WARMUP = 200
 HTF_RATIO = 16  # 15m -> 4h
 
 
-def simulate(df, hdf_full, strategy, screener, index, kcfg, symbol, step=4):
+def simulate(df, hdf_full, strategy, screener, index, kcfg, symbol, step=4,
+             normalise_smart_money=False):
     """One pass over history. `step` skips bars to keep this tractable; a
     setup persists across several bars, so stepping does not lose setups, it
     just samples each one fewer times."""
@@ -64,7 +65,14 @@ def simulate(df, hdf_full, strategy, screener, index, kcfg, symbol, step=4):
         screen = screener.screen(sig, window, htf_slice.tail(100))
         kr = kmod.score_signal(sig.detectors, index) if index.available else None
         u = evaluate_unified(sig, screen, "NEUTRAL", 0, 0, knowledge_result=kr,
-                             knowledge_max_adjust_pct=kcfg.get("max_adjust_pct", 5.0))
+                             knowledge_max_adjust_pct=kcfg.get("max_adjust_pct", 5.0),
+                             # Must mirror the live loop, same reasoning as
+                             # scripts/validate_confluence.py's own fix for
+                             # this: without it every simulated final_pct is
+                             # scored /9 while the bot scores it per-direction
+                             # -- understating longs by ~11 points and capping
+                             # every short at 72.2% regardless of the config.
+                             normalise_by_direction=normalise_smart_money)
         if not u.approved:
             continue
 
@@ -150,7 +158,8 @@ def main():
         fvg_min_size_pct=cfg["fvg_min_size_pct"], liquidity_tolerance_pct=cfg["liquidity_tolerance_pct"],
         reward_risk_ratio=cfg["reward_risk_ratio"], stop_loss_pct=cfg.get("stop_loss_pct"),
         extended_detectors=smc_cfg.get("extended_detectors", False),
-        extended_max_adjust=smc_cfg.get("extended_max_adjust", 0.10))
+        extended_max_adjust=smc_cfg.get("extended_max_adjust", 0.10),
+        htf_neutral_credit=smc_cfg.get("htf_neutral_credit", 0.0))
     screener = TradeScreener(ScreenConfig.from_dict(cfg.get("screening", {})))
 
     c = MT5Client.connect(host=os.getenv("MT5_HOST","127.0.0.1"), port=os.getenv("MT5_PORT","18812"),
@@ -169,7 +178,8 @@ def main():
         print(f"[{sym}] {len(df)} LTF bars {df.iloc[0]['timestamp']} -> {df.iloc[-1]['timestamp']}"
               f" | {len(hdf)} HTF bars | HTF trend {detect_trend(hsw).value}", flush=True)
 
-        trades = simulate(df, hdf, strategy, screener, index, kcfg, sym, args.step)
+        trades = simulate(df, hdf, strategy, screener, index, kcfg, sym, args.step,
+                         normalise_smart_money=cfg.get("normalise_smart_money_by_direction", False))
         print(f"[{sym}] {len(trades)} distinct approved setups", flush=True)
 
         charts = []
