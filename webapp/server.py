@@ -61,6 +61,14 @@ MT5_CENT_DIVISOR = 100.0 if CFG.get("mt5_cent_account") else 1.0
 
 NEWS_FEED_URL = "https://investinglive.com/feed/news"
 NEWS_CACHE_SECONDS = 300  # headlines don't need re-fetching every 15s poll
+# The feed 403s the default python-requests UA; a browser-like UA gets a
+# clean 200. Verified live 2026-08-31 (curl without this header: 403).
+NEWS_FEED_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    )
+}
 _news_cache: dict = {"items": [], "fetched_at": 0.0}
 
 # Regime/hotness data comes from free third-party endpoints (Yahoo, CoinGecko)
@@ -361,7 +369,7 @@ def news():
     now = time.time()
     if now - _news_cache["fetched_at"] > NEWS_CACHE_SECONDS:
         try:
-            resp = requests.get(NEWS_FEED_URL, timeout=8)
+            resp = requests.get(NEWS_FEED_URL, headers=NEWS_FEED_HEADERS, timeout=8)
             resp.raise_for_status()
             root = ET.fromstring(resp.content)
             items = []
