@@ -11,7 +11,19 @@ same CapitalGuard class already used per-venue, just with its own state file.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+
+# One extra attempt before giving up on a single venue read, at explicit user
+# request after the transient-network diagnosis below. This machine is on
+# cellular tether (interfaces cycle far more than wifi/ethernet), and
+# EADDRNOTAVAIL ("Can't assign requested address") -- the dominant observed
+# failure -- is exactly what macOS raises when a new outbound connection is
+# attempted mid-interface-renegotiation. A ~1.5s wait is enough for that kind
+# of blip to clear without meaningfully delaying a 30s poll loop; it does
+# nothing for a genuinely dead connection, which still fails cleanly after
+# the retry, logged the same as before.
+RETRY_DELAY_SECONDS = 1.5
 
 
 @dataclass
@@ -24,8 +36,30 @@ class CombinedBalance:
         return self.hl_value + self.mt5_value_usd
 
 
+def _read_with_retry(venue: str, read_fn, sleep_fn=time.sleep):
+    """Call `read_fn()`; on failure, wait RETRY_DELAY_SECONDS and try exactly
+    ONCE more before giving up. Returns the value, or raises the second
+    attempt's exception (the caller's existing except/log/return-None handles
+    that identically either way -- this only changes whether a transient blip
+    ever reaches that handler at all).
+
+    `sleep_fn` is injectable so tests never actually wait.
+    """
+    try:
+        return read_fn()
+    except Exception as first:
+        sleep_fn(RETRY_DELAY_SECONDS)
+        try:
+            value = read_fn()
+            print(f"  [combined ledger] {venue} recovered on retry "
+                  f"(first attempt: {type(first).__name__})")
+            return value
+        except Exception:
+            raise  # let the caller's existing handler log + return None
+
+
 def fetch_combined_balance(
-    hl_client, mt5_client, mt5_cent_divisor: float = 1.0
+    hl_client, mt5_client, mt5_cent_divisor: float = 1.0, sleep_fn=time.sleep
 ) -> CombinedBalance | None:
     """Best-effort read of both venues' current balance.
 
@@ -33,18 +67,21 @@ def fetch_combined_balance(
     ledger at all (e.g. this process only trades one venue) — not an error,
     contributes 0.
 
-    Returns None if a client that WAS passed fails to report a balance. A
-    partial reading is worse than no reading here: CapitalGuard is stateful
-    (day_start_balance/peak_balance), and silently treating a fetch failure as
-    "that venue has $0 right now" would look like a real loss and could
-    corrupt the guard's baseline — possibly resetting day_start to an
-    artificially low number that then hides a real future loss. Skipping the
-    update for one pass is safe; feeding it bad data is not.
+    Returns None if a client that WAS passed fails to report a balance, EVEN
+    AFTER one retry (see _read_with_retry) — a partial reading is worse than
+    no reading here: CapitalGuard is stateful (day_start_balance/
+    peak_balance), and silently treating a fetch failure as "that venue has $0
+    right now" would look like a real loss and could corrupt the guard's
+    baseline — possibly resetting day_start to an artificially low number
+    that then hides a real future loss. Skipping the update for one pass is
+    safe; feeding it bad data is not.
     """
     hl_value = 0.0
     if hl_client is not None:
         try:
-            hl_value = hl_client.account().account_value
+            hl_value = _read_with_retry(
+                "Hyperliquid", lambda: hl_client.account().account_value, sleep_fn
+            )
         except Exception as e:
             # Previously a bare `except Exception: return None` with no
             # logging at all -- every failure here (1,034 of 1,062 observed
@@ -59,7 +96,11 @@ def fetch_combined_balance(
     mt5_value = 0.0
     if mt5_client is not None:
         try:
-            mt5_value = mt5_client.account_balance() / mt5_cent_divisor
+            mt5_value = _read_with_retry(
+                "MT5",
+                lambda: mt5_client.account_balance() / mt5_cent_divisor,
+                sleep_fn,
+            )
         except Exception as e:
             print(f"  [combined ledger] MT5 balance fetch failed: "
                   f"{type(e).__name__}: {str(e)[:150]}")
