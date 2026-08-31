@@ -184,6 +184,16 @@ def main() -> None:
     # false drawdown halt off a connectivity blip rather than a real loss.
     combined_guard = mt5_ledger_client = None
     mt5_cent_divisor = 100.0 if cfg.get("mt5_cent_account") else 1.0
+    # Same defensive pattern as bot/runner.py's hl_ledger_client (see there
+    # for the live diagnosis): a lightly-used, periodic-only connection is
+    # the profile most exposed to a silently-dropped NAT mapping.
+    # reconnect_if_needed only checks `is not None`, never whether the client
+    # still works, so without this a client that goes stale this way would
+    # be retried on forever. Not currently symptomatic here (MT5 is a local
+    # bridge connection, not over the cellular tether), but kept symmetric
+    # rather than left as a gap for whenever it is.
+    mt5_ledger_consecutive_failures = 0
+    MT5_LEDGER_STALE_THRESHOLD = 3
     if args.live:
         combined_guard = CapitalGuard.load(Path("combined_guard_state.json"), **guard_thresholds)
         try:
@@ -279,6 +289,7 @@ def main() -> None:
                         else:
                             combined = fetch_combined_balance(client, mt5_ledger_client, mt5_cent_divisor)
                             if combined is not None:
+                                mt5_ledger_consecutive_failures = 0
                                 combined_guard.update(combined.total, trading_day())
                                 if fixed_risk_cfg.get("enabled"):
                                     # combined.total only decides the $3-vs-$6 stage;
@@ -296,8 +307,17 @@ def main() -> None:
                                     print(f"  [fixed risk] combined balance ${combined.total:,.2f} -> "
                                           f"${risk_usd:.2f}/trade ({trader.risk_pct:.1f}% of ${account_value:,.2f})")
                             else:
+                                mt5_ledger_consecutive_failures += 1
                                 print("  [combined ledger] balance fetch failed this pass — "
-                                      "guard state unchanged, using last known status")
+                                      "guard state unchanged, using last known status "
+                                      f"({mt5_ledger_consecutive_failures}/{MT5_LEDGER_STALE_THRESHOLD} "
+                                      f"consecutive)")
+                                if mt5_ledger_consecutive_failures >= MT5_LEDGER_STALE_THRESHOLD:
+                                    print(f"  [combined ledger] MT5 client stale after "
+                                          f"{mt5_ledger_consecutive_failures} consecutive failures "
+                                          f"— discarding, will reconnect fresh next pass")
+                                    mt5_ledger_client = None
+                                    mt5_ledger_consecutive_failures = 0
                 else:
                     account_value, withdrawable, open_positions = args.balance, args.balance, []
 

@@ -132,6 +132,23 @@ def run_bot(config_path: str = "config.yaml") -> None:
     # but declared here so the main loop can safely check it for every venue.
     combined_guard: CapitalGuard | None = None
     hl_ledger_client = None
+    # Diagnosed live: hl_ledger_client is a SEPARATE, lightly-used Hyperliquid
+    # connection (one .account() call per ~30s pass) that exists only for this
+    # combined-ledger check -- unlike a primary trading client under constant
+    # load, an idle-most-of-the-time connection is exactly the profile a
+    # carrier NAT (this machine is on cellular tether) silently drops without
+    # either endpoint being notified. reconnect_if_needed only checks `is not
+    # None`, never whether the client still WORKS, so a client that goes
+    # stale this way was kept and retried on forever: confirmed live at 402
+    # consecutive failures on the SAME client object, 0 recovered by the
+    # retry-with-backoff fix (which reuses that same dead pooled connection),
+    # while an entirely fresh connect()+.account() succeeded in 3.12s outside
+    # the process. The retry helps a genuine on-the-wire blip; it cannot help
+    # a connection that LOOKS alive locally but is dead on the network -- only
+    # discarding it and building a truly new one (new Session, new pool, new
+    # NAT mapping) can.
+    hl_ledger_consecutive_failures = 0
+    HL_LEDGER_STALE_THRESHOLD = 3  # ~3 failed passes before forcing a fresh client
 
     if venue == "mt5":
         # MT5 supplies both market data and execution, via either backend —
@@ -344,6 +361,7 @@ def run_bot(config_path: str = "config.yaml") -> None:
                 else:
                     combined = fetch_combined_balance(hl_ledger_client, client, cent_divisor)
                     if combined is not None:
+                        hl_ledger_consecutive_failures = 0
                         combined_guard.update(combined.total, trading_day())
                         if fixed_risk_cfg.get("enabled"):
                             risk_usd = staged_fixed_risk_usd(
@@ -354,8 +372,22 @@ def run_bot(config_path: str = "config.yaml") -> None:
                             )
                             print(f"  [fixed risk] combined balance ${combined.total:,.2f} -> ${risk_usd:.2f}/trade")
                     else:
+                        hl_ledger_consecutive_failures += 1
                         print("  [combined ledger] balance fetch failed this pass — "
-                              "guard state unchanged, using last known status")
+                              "guard state unchanged, using last known status "
+                              f"({hl_ledger_consecutive_failures}/{HL_LEDGER_STALE_THRESHOLD} "
+                              f"consecutive)")
+                        if hl_ledger_consecutive_failures >= HL_LEDGER_STALE_THRESHOLD:
+                            # The client LOOKS connected (is not None) but has
+                            # proven dead N passes running -- discard it so
+                            # the next pass's reconnect_if_needed builds a
+                            # genuinely fresh one instead of retrying the same
+                            # stale connection forever.
+                            print(f"  [combined ledger] Hyperliquid client stale after "
+                                  f"{hl_ledger_consecutive_failures} consecutive failures "
+                                  f"— discarding, will reconnect fresh next pass")
+                            hl_ledger_client = None
+                            hl_ledger_consecutive_failures = 0
 
             for item in watchlist:
                 sym = item["symbol"]
