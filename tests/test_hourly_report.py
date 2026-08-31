@@ -140,3 +140,57 @@ def test_report_includes_every_symbol():
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# --- candlestick-only cross-timeframe section --------------------------------
+# Independent of the SMC confluence stack -- no zones/sweeps/fib. Reports
+# whether the LTF and HTF candlestick geometry actually agree.
+
+
+def test_candlestick_section_omitted_when_data_absent():
+    """Fields default to None; the section must not print with gaps."""
+    r = build_symbol_report(_base())
+    assert "Candlesticks only" not in r
+
+
+def test_candlestick_section_shown_when_data_present():
+    r = build_symbol_report(_base(
+        ltf_candle_kind="bearish_pin", ltf_candle_strength=0.6,
+        ltf_candle_bias="bullish", ltf_candle_bias_strength=0.09,
+        htf_candle_kind="neutral", htf_candle_strength=0.0,
+        htf_candle_bias="neutral", htf_candle_bias_strength=0.0,
+    ))
+    assert "Candlesticks only" in r
+    assert "bearish_pin" in r and "neutral" in r
+
+
+def test_correspond_no_when_biases_differ():
+    r = build_symbol_report(_base(
+        ltf_candle_kind="bullish_close", ltf_candle_strength=0.5,
+        ltf_candle_bias="bullish", ltf_candle_bias_strength=0.4,
+        htf_candle_kind="bearish_pin", htf_candle_strength=0.7,
+        htf_candle_bias="bearish", htf_candle_bias_strength=0.2,
+    ))
+    assert "Correspond: NO" in r
+
+
+def test_correspond_yes_when_biases_agree_and_are_directional():
+    r = build_symbol_report(_base(
+        ltf_candle_kind="bullish_pin", ltf_candle_strength=0.6,
+        ltf_candle_bias="bullish", ltf_candle_bias_strength=0.3,
+        htf_candle_kind="bullish_close", htf_candle_strength=0.5,
+        htf_candle_bias="bullish", htf_candle_bias_strength=0.5,
+    ))
+    assert "Correspond: YES — BULLISH on both" in r
+
+
+def test_correspond_no_when_both_neutral():
+    """Two neutrals are technically equal, but neutral is not a direction --
+    'correspond' must mean two timeframes agreeing on a DIRECTION."""
+    r = build_symbol_report(_base(
+        ltf_candle_kind="neutral", ltf_candle_strength=0.0,
+        ltf_candle_bias="neutral", ltf_candle_bias_strength=0.0,
+        htf_candle_kind="neutral", htf_candle_strength=0.0,
+        htf_candle_bias="neutral", htf_candle_bias_strength=0.0,
+    ))
+    assert "Correspond: NO" in r

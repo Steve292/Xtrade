@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 
 from bot import knowledge as knowledge_mod, live_state
 from bot.hourly_report import SymbolSnapshot, build_report
+from bot.smc.candles import classify_candle, rejection_bias
 from bot.mt5.client import MT5Client
 from bot.screening import ScreenConfig, TradeScreener
 from bot.smc.fibonacci import ote_band, recent_leg
@@ -79,6 +80,12 @@ def _snapshot_for(sym: str, cfg: dict, mt5: MT5Client, strategy: SMCStrategy,
         ote = ote_band(*leg)
         ote_dir = leg_dir
 
+    # Candlestick-only read, independent of the SMC confluence stack above.
+    ltf_candle = classify_candle(df)
+    ltf_bias, ltf_bias_str = rejection_bias(df, bars=3)
+    htf_candle = classify_candle(hdf)
+    htf_bias, htf_bias_str = rejection_bias(hdf, bars=3)
+
     snap = SymbolSnapshot(
         symbol=sym, price=price, bar_time=bar_time,
         ltf_label=ltf, htf_label=htf,
@@ -88,6 +95,10 @@ def _snapshot_for(sym: str, cfg: dict, mt5: MT5Client, strategy: SMCStrategy,
         sweep=sweep_str, ote_band=ote, ote_direction=ote_dir,
         signal_type=sig.type.value, signal_reason=sig.reason,
         auto_fire_pct=live_state.get_auto_fire_pct(),
+        ltf_candle_kind=ltf_candle.kind, ltf_candle_strength=ltf_candle.strength,
+        ltf_candle_bias=ltf_bias, ltf_candle_bias_strength=ltf_bias_str,
+        htf_candle_kind=htf_candle.kind, htf_candle_strength=htf_candle.strength,
+        htf_candle_bias=htf_bias, htf_candle_bias_strength=htf_bias_str,
     )
 
     if sig.type is not SignalType.NONE:

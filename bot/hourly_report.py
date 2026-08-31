@@ -44,6 +44,20 @@ class SymbolSnapshot:
     knowledge_pct: float | None = None
     auto_fire_pct: float = 100.0
     approved: bool = False
+    # Candlestick-only read (bot/smc/candles.py), independent of the SMC
+    # confluence stack above -- no zones, no sweeps, no fib. Wick/close
+    # geometry only, checked on both timeframes so the report can say whether
+    # they actually agree with each other, which the SMC-side numbers alone
+    # don't surface. None on any field means the data wasn't available (e.g.
+    # too few bars); the section is omitted rather than printed with gaps.
+    ltf_candle_kind: str | None = None
+    ltf_candle_strength: float | None = None
+    ltf_candle_bias: str | None = None  # "bullish" | "bearish" | "neutral"
+    ltf_candle_bias_strength: float | None = None
+    htf_candle_kind: str | None = None
+    htf_candle_strength: float | None = None
+    htf_candle_bias: str | None = None
+    htf_candle_bias_strength: float | None = None
 
 
 def _price_vs_ote(price: float, band: tuple | None) -> str | None:
@@ -109,6 +123,19 @@ def build_symbol_report(snap: SymbolSnapshot) -> str:
     if snap.ote_band:
         lines.append(f"  Fib OTE ({snap.ote_direction}):  "
                      f"{_price_vs_ote(snap.price, snap.ote_band)}")
+
+    if snap.ltf_candle_bias is not None and snap.htf_candle_bias is not None:
+        lines.append("")
+        lines.append(f"  Candlesticks only (no zones/sweeps/fib):")
+        lines.append(f"    {snap.ltf_label}: {snap.ltf_candle_kind}"
+                     f" (strength {snap.ltf_candle_strength:.2f})  |  "
+                     f"3-bar bias {snap.ltf_candle_bias} ({snap.ltf_candle_bias_strength:.2f})")
+        lines.append(f"    {snap.htf_label}: {snap.htf_candle_kind}"
+                     f" (strength {snap.htf_candle_strength:.2f})  |  "
+                     f"3-bar bias {snap.htf_candle_bias} ({snap.htf_candle_bias_strength:.2f})")
+        correspond = (snap.ltf_candle_bias == snap.htf_candle_bias
+                     and snap.ltf_candle_bias != "neutral")
+        lines.append(f"    Correspond: {'YES — ' + snap.ltf_candle_bias.upper() + ' on both' if correspond else 'NO'}")
 
     lines.append("")
     if snap.signal_type == "none":
