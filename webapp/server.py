@@ -167,8 +167,12 @@ def _trader(client: HyperliquidClient) -> HyperliquidTrader:
                     threshold_usd=fixed_risk_cfg.get("threshold_usd", 100.0),
                 )
                 risk_pct = risk_pct_for_fixed_usd(risk_usd, account_value)
-        except Exception:
-            pass  # MT5 unreachable from the dashboard process — fall back to risk_per_trade_pct
+        except Exception as e:
+            # Dashboard/manual-Fire path only, not the autonomous loop -- a
+            # human would see the resulting risk_pct in the UI either way,
+            # but the REASON for falling back was previously invisible.
+            print(f"  [trader] MT5 unreachable from dashboard "
+                  f"({type(e).__name__}: {str(e)[:120]}) -- using risk_per_trade_pct")
 
     return HyperliquidTrader(
         client, strategy, screener,

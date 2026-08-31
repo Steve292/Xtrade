@@ -34,6 +34,15 @@ _BINANCE_INTERVAL_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "
 def _default_fetch(url: str, **kwargs):
     return requests.get(url, **kwargs)
 
+def _log_fetch_failure(source: str, e: Exception) -> None:
+    """One line, everywhere a fetch degrades to None. Every function in this
+    module returns None on ANY failure by design -- a transient outage must
+    degrade the caller's weighting, never crash the regime/hotness engines --
+    but until this existed that degradation was silent. A source that has
+    been failing for days looked identical to one that has never been
+    reachable at all, with no way to tell the two apart from the logs."""
+    print(f"  [marketdata] {source} unavailable ({type(e).__name__}: {str(e)[:120]})")
+
 
 def yahoo_change_pct(
     symbol: str,
@@ -63,7 +72,8 @@ def yahoo_change_pct(
         if not prior:
             return None
         return (latest - prior) / prior * 100
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("yahoo_change_pct", e)
         return None
 
 
@@ -80,7 +90,8 @@ def yahoo_level(symbol: str, fetch=_default_fetch) -> float | None:
         resp.raise_for_status()
         meta = resp.json()["chart"]["result"][0]["meta"]
         return float(meta["regularMarketPrice"])
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("yahoo_level", e)
         return None
 
 
@@ -96,7 +107,8 @@ def coingecko_global(fetch=_default_fetch) -> dict | None:
             "total_market_cap_usd": float(data["total_market_cap"]["usd"]),
             "market_cap_percentage": {k: float(v) for k, v in data["market_cap_percentage"].items()},
         }
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("coingecko_global", e)
         return None
 
 
@@ -113,7 +125,8 @@ def coingecko_category_cap(category_id: str, fetch=_default_fetch) -> float | No
             if row.get("id") == category_id:
                 return float(row["market_cap"])
         return None
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("coingecko_category_cap", e)
         return None
 
 
@@ -129,7 +142,8 @@ def coingecko_category_change_24h(category_id: str, fetch=_default_fetch) -> flo
             if row.get("id") == category_id:
                 return float(row["market_cap_change_24h"])
         return None
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("coingecko_category_change_24h", e)
         return None
 
 
@@ -160,7 +174,8 @@ def deribit_option_oi_by_strike(currency: str = "BTC", fetch=_default_fetch) -> 
                 continue
             by_strike[strike] = by_strike.get(strike, 0.0) + float(row.get("open_interest") or 0)
         return by_strike or None
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("deribit_option_oi_by_strike", e)
         return None
 
 
@@ -179,7 +194,8 @@ def crypto_news_headlines(limit: int = 30, fetch=_default_fetch) -> list[dict] |
             if title:
                 out.append({"title": title, "link": (item.findtext("link") or "").strip()})
         return out or None
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("crypto_news_headlines", e)
         return None
 
 
@@ -226,7 +242,8 @@ def coingecko_top_by_market_cap(limit: int = 10, fetch=_default_fetch) -> list[d
             for r in rows
         ]
         return out or None
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("coingecko_top_by_market_cap", e)
         return None
 
 
@@ -258,7 +275,8 @@ def coingecko_top_movers_avg_7d_pct(category_id: str, top_n: int = 10, fetch=_de
         if not returns:
             return None
         return sum(returns) / len(returns)
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("coingecko_top_movers_avg_7d_pct", e)
         return None
 
 
@@ -307,9 +325,10 @@ def candles_with_binance_fallback(
     if venue_client is not None:
         try:
             return venue_client.candles(coin, interval=interval, lookback_hours=lookback_hours)
-        except Exception:
-            pass
+        except Exception as e:
+            _log_fetch_failure("candles_with_binance_fallback (venue, falling back to Binance)", e)
     try:
         return binance_candles(interval, lookback_hours, symbol=f"{coin}/USDT", exchange_factory=exchange_factory)
-    except Exception:
+    except Exception as e:
+        _log_fetch_failure("candles_with_binance_fallback", e)
         return None

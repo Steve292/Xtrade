@@ -103,5 +103,11 @@ class EVMWallet:
 
             ticker = ccxt.binance().fetch_ticker("ETH/USDT")
             return float(ticker["last"])
-        except Exception:
+        except Exception as e:
+            # Silently returning a hardcoded $3500 in LIVE mode could be
+            # wildly stale at any given time with no trace it ever happened --
+            # this path is currently unreachable (venue: mt5, not evm), but
+            # kept correct rather than left as a gap for whenever it is.
+            print(f"  [evm wallet] live ETH price fetch failed "
+                  f"({type(e).__name__}: {str(e)[:120]}) -- using $3500 fallback")
             return 3500.0

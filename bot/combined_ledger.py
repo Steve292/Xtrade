@@ -89,5 +89,13 @@ def reconnect_if_needed(client, connect_fn):
         return client
     try:
         return connect_fn()
-    except Exception:
+    except Exception as e:
+        # Same gap as fetch_combined_balance had, and arguably the ROOT of
+        # many of its downstream failures: if a dead client never reconnects
+        # because connect_fn() keeps failing silently, every subsequent
+        # balance fetch fails for a reason this function alone could explain
+        # and never did. Every ~30s call from both live loops when the client
+        # is down previously left zero trace of WHY reconnection isn't
+        # happening.
+        print(f"  [reconnect] attempt failed ({type(e).__name__}: {str(e)[:120]})")
         return None
