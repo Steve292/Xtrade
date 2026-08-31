@@ -249,6 +249,17 @@ position_sizing:
   # widens what ALL four together can reach, not confidence alone.
   max_multiple: 1.25
   max_risk_usd: 5.0      # ...and never more than this many dollars, ever
+  # confidence_only, at explicit user request: when true, size purely on the
+  # setup's own confidence -- regime_alloc_weight/hotness_multiplier/
+  # volatility_adjust are neutralised to 1.0 rather than removed from the
+  # chain, so the same final_risk_pct math and the same max_multiple/
+  # max_risk_usd ceilings above still apply. false (default): all four
+  # factors participate, i.e. "size scales with signal strength AND market
+  # conditions" -- what was live before this flag existed.
+  # MT5 only -- the Hyperliquid loop (hypertrade.py) has never used this
+  # adaptive chain at all; it sizes on the flat staged fixed_risk_usd alone,
+  # a pre-existing scope boundary this flag does not change.
+  confidence_only: true
 
 # --- Positions this bot did not place
 # The account is also traded by hand, and MT5 reports every position on it,

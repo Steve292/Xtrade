@@ -233,6 +233,7 @@ from bot.position_sizing import (  # noqa: E402
     CONFIDENCE_FLOOR,
     MAX_COMBINED_MULTIPLIER,
     MAX_CONFIDENCE_MULTIPLIER,
+    MIN_COMBINED_MULTIPLIER,
     MIN_CONFIDENCE_MULTIPLIER,
     apply_risk_ceiling,
     confidence_multiplier,
@@ -319,3 +320,60 @@ def test_ceiling_skips_sizing_on_degenerate_inputs():
     assert apply_risk_ceiling(50.0, -1.0, 4.5) == 0.0     # negative balance
     assert apply_risk_ceiling(50.0, LIVE_BALANCE, 0.0) == 0.0   # no ceiling
     assert apply_risk_ceiling(0.0, LIVE_BALANCE, 4.5) == 0.0    # no risk
+
+
+# --- confidence_only sizing (bot/runner.py's flag) --------------------------
+# The flag itself lives in runner.py's live loop as a branch that neutralises
+# regime_alloc_weight/hotness_multiplier/volatility_adjust to 1.0 before
+# building SizingFactors -- not new math in this module. What's tested here
+# is the invariant that branch relies on: with those three pinned at 1.0,
+# final_risk_pct depends on confidence_multiplier ALONE, regardless of what
+# regime/hotness/volatility would otherwise have been.
+
+
+def test_neutralised_factors_make_confidence_the_only_driver():
+    base = 30.0  # a representative effective_risk_pct on a small balance
+    # Two calls that would give WILDLY different results with the real
+    # factors (hot market + high vol vs risk-off + calm) must be IDENTICAL
+    # once regime/hotness/vol are all pinned to 1.0.
+    a = final_risk_pct(SizingFactors(
+        base_risk_pct=base, regime_alloc_weight=1.0, hotness_multiplier=1.0,
+        volatility_adjust=1.0, confidence_multiplier=confidence_multiplier(0.90)))
+    b = final_risk_pct(SizingFactors(
+        base_risk_pct=base, regime_alloc_weight=1.0, hotness_multiplier=1.0,
+        volatility_adjust=1.0, confidence_multiplier=confidence_multiplier(0.90)))
+    assert _close(a, b)
+
+
+def test_confidence_only_result_matches_hand_computed_multiplier():
+    base = 30.0
+    conf = confidence_multiplier(0.85)  # the only non-1.0 factor
+    expected = base * min(MAX_COMBINED_MULTIPLIER, max(MIN_COMBINED_MULTIPLIER, conf))
+    got = final_risk_pct(SizingFactors(
+        base_risk_pct=base, regime_alloc_weight=1.0, hotness_multiplier=1.0,
+        volatility_adjust=1.0, confidence_multiplier=conf))
+    assert _close(got, expected)
+
+
+def test_confidence_only_still_respects_the_absolute_dollar_ceiling():
+    """The flag changes which factors feed the formula; it does not touch the
+    dollar ceiling downstream of it. Even at max confidence (1.5x) on a small
+    balance, the ceiling must still hold."""
+    base_pct = risk_pct_for_fixed_usd(STAGED_RISK_USD, LIVE_BALANCE)
+    adapted = final_risk_pct(SizingFactors(
+        base_risk_pct=base_pct, regime_alloc_weight=1.0, hotness_multiplier=1.0,
+        volatility_adjust=1.0, confidence_multiplier=MAX_CONFIDENCE_MULTIPLIER))
+    ceiling = min(STAGED_RISK_USD * 1.25, 5.0)  # this session's live values
+    capped = apply_risk_ceiling(adapted, LIVE_BALANCE, ceiling)
+    assert capped / 100 * LIVE_BALANCE <= ceiling + 1e-9
+
+
+def test_confidence_only_scales_monotonically_with_confidence():
+    base = 30.0
+    results = [
+        final_risk_pct(SizingFactors(
+            base_risk_pct=base, regime_alloc_weight=1.0, hotness_multiplier=1.0,
+            volatility_adjust=1.0, confidence_multiplier=confidence_multiplier(c / 20)))
+        for c in range(21)
+    ]
+    assert results == sorted(results)

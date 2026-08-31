@@ -445,11 +445,25 @@ def run_bot(config_path: str = "config.yaml") -> None:
                                     vol_adjust = volatility_adjust(
                                         float(atr20.iloc[-1]), float(atr100.mean())
                                     )
+                            # confidence_only, at explicit user request: size
+                            # purely on the setup's own confidence, decoupled
+                            # from regime/hotness/volatility (market-condition
+                            # factors, not signal strength). Those three are
+                            # neutralised to 1.0 rather than removed from the
+                            # chain entirely, so the SAME final_risk_pct/
+                            # apply_risk_ceiling math and the SAME MAX_COMBINED_
+                            # MULTIPLIER/max_risk_usd caps still apply -- this
+                            # changes what feeds the formula, not the formula
+                            # or its safety ceiling.
+                            confidence_only = sizing_cfg.get("confidence_only", False)
+                            used_regime = 1.0 if confidence_only else regime_alloc_weight(regime_label)
+                            used_hotness = 1.0 if confidence_only else hotness_mult
+                            used_vol = 1.0 if confidence_only else vol_adjust
                             factors = SizingFactors(
                                 base_risk_pct=effective_risk_pct,
-                                regime_alloc_weight=regime_alloc_weight(regime_label),
-                                hotness_multiplier=hotness_mult,
-                                volatility_adjust=vol_adjust,
+                                regime_alloc_weight=used_regime,
+                                hotness_multiplier=used_hotness,
+                                volatility_adjust=used_vol,
                                 confidence_multiplier=confidence_multiplier(signal.confidence),
                             )
                             adapted_pct = final_risk_pct(factors)
@@ -467,14 +481,15 @@ def run_bot(config_path: str = "config.yaml") -> None:
                             capped_pct = apply_risk_ceiling(
                                 adapted_pct, sized_balance, ceiling_usd
                             )
+                            mode_tag = "confidence-only" if confidence_only else "full chain"
                             print(
-                                f"  [sizing] {sym} base {effective_risk_pct:.2f}% "
+                                f"  [sizing:{mode_tag}] {sym} base {effective_risk_pct:.2f}% "
                                 f"(${base_usd:.2f}) -> adapted {adapted_pct:.2f}% "
                                 f"-> capped {capped_pct:.2f}% "
                                 f"(${capped_pct / 100 * sized_balance:.2f}, "
                                 f"ceiling ${ceiling_usd:.2f}) "
-                                f"[regime {regime_label} x{regime_alloc_weight(regime_label):.2f}, "
-                                f"hot x{hotness_mult:.2f}, vol x{vol_adjust:.2f}, "
+                                f"[regime {regime_label} x{used_regime:.2f}, "
+                                f"hot x{used_hotness:.2f}, vol x{used_vol:.2f}, "
                                 f"conf x{confidence_multiplier(signal.confidence):.2f}]"
                             )
                             effective_risk_pct = capped_pct
