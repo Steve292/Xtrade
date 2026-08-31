@@ -74,11 +74,20 @@ def _snapshot_for(sym: str, cfg: dict, mt5: MT5Client, strategy: SMCStrategy,
     sig = strategy.analyze(df, hdf)
     ote = None
     ote_dir = None
-    leg_dir = "bullish" if sig.type != SignalType.SHORT else "bearish"
-    leg = recent_leg(lswings, leg_dir)
+    # BUG FIX: recent_leg()'s direction argument checks `== "long"` literally
+    # -- anything else (including "bullish"/"bearish", what this originally
+    # passed) falls into its else branch, which is the SHORT/down-leg
+    # calculation. Every OTE pocket this report ever printed as "(bullish)"
+    # was silently the down-leg's numbers, mislabeled -- on live gold data
+    # this was an 11-point error (4444.95-4449.64 actual vs 4456.33-4461.05
+    # shown), enough to flip whether price reads as inside or outside the
+    # pocket. "bearish" happened to be harmless by coincidence: it also isn't
+    # "long", so it took the same (correct-for-short) branch either way.
+    leg_call_dir = "long" if sig.type != SignalType.SHORT else "short"
+    ote_dir = "bullish" if sig.type != SignalType.SHORT else "bearish"
+    leg = recent_leg(lswings, leg_call_dir)
     if leg:
         ote = ote_band(*leg)
-        ote_dir = leg_dir
 
     # Candlestick-only read, independent of the SMC confluence stack above.
     ltf_candle = classify_candle(df)

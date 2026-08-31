@@ -118,7 +118,13 @@ def annotate(df, idx, trade):
     window = df.iloc[max(0, idx - WARMUP):idx]
 
     swings = find_swing_points(window, 5)
-    leg = recent_leg(swings, "bullish" if trade["side"] == "long" else "bearish")
+    # BUG FIX: recent_leg() checks its direction arg == "long" literally --
+    # "bullish"/"bearish" (what this passed) both fail that check and fall
+    # into the else/short branch regardless of trade side, so every LONG
+    # trade's annotated OTE band was silently the wrong (down-leg) numbers.
+    # This is what produced the mislabeled band on the LONG trade charted in
+    # the published "Why Nothing Trades" artifact.
+    leg = recent_leg(swings, trade["side"])  # "long" | "short", matches the field's own values
     ote = list(ote_band(*leg)) if leg else None
     pools = detect_liquidity_pools(window, 0.0005)
     sweep = recent_sweep(pools, window, bars=20)
