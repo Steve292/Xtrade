@@ -236,8 +236,13 @@ def _symbol_ticker(mt5: MT5Client, symbol: str) -> dict:
         if len(candles) > 168:
             price_7d_ago = float(candles.iloc[-169]["close"])
             out["change_7d_pct"] = (mid - price_7d_ago) / price_7d_ago * 100
-    except Exception:
-        pass
+    except Exception as e:
+        # bid/ask/mid above already succeeded -- this only affects whether
+        # the %-change columns populate on the Traded Pairs table, so it
+        # stays non-fatal. Previously silent, though, with no way to tell a
+        # persistent candle-fetch problem from an occasional blip.
+        print(f"  [ticker] {symbol} 1h/24h/7d change unavailable "
+              f"({type(e).__name__}: {str(e)[:120]})")
     return out
 
 
@@ -637,8 +642,13 @@ def _get_smart_money() -> tuple[str, int, int]:
         try:
             _regime_cache["data"] = compute_snapshot(CFG)
             _regime_cache["fetched_at"] = now
-        except Exception:
-            pass  # fall through to stale/absent cache below
+        except Exception as e:
+            # Feeds the smart-money read for both the dashboard's manual Fire
+            # button and the MT5 scan table -- a human could act on a stale
+            # read here with no way to know it was stale. Previously silent.
+            age = (f", {(now - _regime_cache['fetched_at'])/60:.0f}min stale cache"
+                  if _regime_cache["data"] is not None else ", no cache yet")
+            print(f"  [regime] refresh failed ({type(e).__name__}: {str(e)[:120]}){age}")
     sm = (_regime_cache["data"] or {}).get("smart_money")
     if not sm:
         return "NEUTRAL", 0, 0

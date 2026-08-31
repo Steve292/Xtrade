@@ -59,9 +59,18 @@ def get_cached_snapshot(cfg: dict | None = None, ttl_seconds: float = 900.0) -> 
         try:
             _cache["data"] = compute_snapshot(cfg)
             _cache["fetched_at"] = now
-        except Exception:
+        except Exception as e:
             if _cache["data"] is None:
                 raise
+            # A refresh failure with something cached to fall back on was
+            # previously silent -- this feeds the smart-money vote real
+            # trades are scored against, so a refresh that has been failing
+            # for hours had no trace at all beyond an ever-staler read no one
+            # could see was stale. Age is what actually matters here, not
+            # just the fact that it happened once.
+            age_min = (now - _cache["fetched_at"]) / 60
+            print(f"  [snapshot] refresh failed ({type(e).__name__}: {str(e)[:120]}) "
+                  f"— serving cache, now {age_min:.0f}min stale")
     return _cache["data"]
 
 
@@ -184,8 +193,13 @@ def compute_snapshot(cfg: dict | None = None) -> dict:
             btc_price = ticks[0].get("mid")
             btc_24h = ticks[0].get("change_24h_pct")
             funding_rate = ticks[0].get("funding_rate")
-    except Exception:
-        pass
+    except Exception as e:
+        # Best-effort by design (this is one of several inputs to the
+        # smart-money vote, and the rest still compute without it) -- but
+        # silent before this, which made "has this been failing for days"
+        # unanswerable from the logs.
+        print(f"  [snapshot] Hyperliquid BTC ticker unavailable "
+              f"({type(e).__name__}: {str(e)[:120]})")
 
     # Each candle set is fetched independently, each with its own Binance
     # fallback (see bot.marketdata.candles_with_binance_fallback) -- a
@@ -221,8 +235,13 @@ def compute_snapshot(cfg: dict | None = None) -> dict:
                 htf_neutral_credit=cfg.get("smc", {}).get("htf_neutral_credit", 0.0),
             )
             smc_signal_type = strategy.analyze(btc_candles, htf_candles).type.value
-        except Exception:
-            pass
+        except Exception as e:
+            # Feeds smc_fib_signal -> the smart-money vote evaluate_unified
+            # scores REAL trades against. A silent failure here meant the
+            # vote defaulted to NEUTRAL with no indication why -- identical
+            # to a genuine neutral read from the caller's side.
+            print(f"  [snapshot] SMC+Fib signal computation failed "
+                  f"({type(e).__name__}: {str(e)[:120]})")
 
     cg_global = marketdata.coingecko_global()
     stablecoin_cap = marketdata.coingecko_category_cap("stablecoins")

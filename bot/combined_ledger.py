@@ -45,14 +45,24 @@ def fetch_combined_balance(
     if hl_client is not None:
         try:
             hl_value = hl_client.account().account_value
-        except Exception:
+        except Exception as e:
+            # Previously a bare `except Exception: return None` with no
+            # logging at all -- every failure here (1,034 of 1,062 observed
+            # "balance fetch failed" lines in one live session) vanished with
+            # zero diagnostic trail. The other 28 only surfaced because
+            # hypertrade.py happens to log a SEPARATE retry path for its own
+            # reconnect attempts; this function's own failures were silent.
+            print(f"  [combined ledger] Hyperliquid balance fetch failed: "
+                  f"{type(e).__name__}: {str(e)[:150]}")
             return None
 
     mt5_value = 0.0
     if mt5_client is not None:
         try:
             mt5_value = mt5_client.account_balance() / mt5_cent_divisor
-        except Exception:
+        except Exception as e:
+            print(f"  [combined ledger] MT5 balance fetch failed: "
+                  f"{type(e).__name__}: {str(e)[:150]}")
             return None
 
     return CombinedBalance(hl_value=hl_value, mt5_value_usd=mt5_value)
