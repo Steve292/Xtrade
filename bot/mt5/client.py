@@ -139,6 +139,16 @@ class MT5Client:
             raise RuntimeError(f"account_info() is None: {self._mt5.last_error()}")
         return float(acct.balance)
 
+    def account_free_margin(self) -> float:
+        """What a broker UI labels "available"/"free" balance -- the balance
+        minus margin already locked up in open positions, i.e. what's
+        actually still committable to a new trade. Distinct from
+        account_balance(), which includes that locked margin."""
+        acct = self._mt5.account_info()
+        if acct is None:
+            raise RuntimeError(f"account_info() is None: {self._mt5.last_error()}")
+        return float(acct.margin_free)
+
     # --- execution -------------------------------------------------------
 
     def market_order(

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.smc.webapp</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/mac/Projects/smc-trading-bot/venv/bin/python</string>
+        <string>-u</string>
+        <string>/Users/mac/Projects/smc-trading-bot/webapp/server.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/mac/Projects/smc-trading-bot</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>/Users/mac/Projects/smc-trading-bot/logs/webapp.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/mac/Projects/smc-trading-bot/logs/webapp.log</string>
+</dict>
+</plist>

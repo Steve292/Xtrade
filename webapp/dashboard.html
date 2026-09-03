@@ -204,8 +204,9 @@
   <section>
     <h2><span class="live-dot" title="Live — polled from the venue directly"></span>Account</h2>
     <div class="stat-row" id="statusStats">
-      <div class="stat"><div class="l">Account value</div><div class="v" id="statAccountValue">—</div></div>
-      <div class="stat"><div class="l">Withdrawable</div><div class="v" id="statWithdrawable">—</div></div>
+      <div class="stat"><div class="l">Account value (HL)</div><div class="v" id="statAccountValue">—</div></div>
+      <div class="stat"><div class="l">Withdrawable (HL)</div><div class="v" id="statWithdrawable">—</div></div>
+      <div class="stat" title="Free margin -- what MT5 can still commit to a new trade, not the raw account balance"><div class="l">MT5 available</div><div class="v" id="statMt5Available">—</div></div>
       <div class="stat"><div class="l">Open positions</div><div class="v" id="statPositions">—</div></div>
       <div class="stat"><div class="l">Watchlist</div><div class="v" id="statWatchlist">—</div></div>
     </div>
@@ -230,7 +231,6 @@
         <div id="smartMoneyVote" style="font-size:13px;font-weight:700;">—</div>
       </div>
       <div id="smartMoneyModules" class="sub" style="margin:8px 0 0;display:flex;gap:6px;flex-wrap:wrap;"></div>
-      <div id="newsHeadlines" class="sub" style="margin:8px 0 0;"></div>
     </div>
   </section>
 
@@ -511,6 +511,14 @@ async function refreshStatus() {
     toggle.setAttribute('aria-checked', s.armed ? 'true' : 'false');
     setValDirectional(document.getElementById('statAccountValue'), fmtUsd(s.account_value), 'stat:account_value', s.account_value);
     setValDirectional(document.getElementById('statWithdrawable'), fmtUsd(s.withdrawable), 'stat:withdrawable', s.withdrawable);
+    var mt5El = document.getElementById('statMt5Available');
+    if (s.mt5_free_margin === null || s.mt5_free_margin === undefined) {
+      mt5El.textContent = s.mt5_error ? 'unavailable' : '—';
+      mt5El.title = s.mt5_error || '';
+    } else {
+      mt5El.title = '';
+      setValDirectional(mt5El, fmtUsd(s.mt5_free_margin), 'stat:mt5_free_margin', s.mt5_free_margin);
+    }
     setVal(document.getElementById('statPositions'), String(s.open_positions));
     setVal(document.getElementById('statWatchlist'), s.watchlist_size + ' coins');
     window._armed = s.armed;
@@ -567,18 +575,11 @@ async function refreshRegime() {
       span.textContent = titleCase(name).replace('Smc Fib', 'SMC+Fib').replace('Cvd', 'CVD').replace('Gex', 'GEX') + ': ' + titleCase(mod.signal);
       modsEl.appendChild(span);
     });
-
-    var news = d.regulatory_news;
-    var newsEl = document.getElementById('newsHeadlines');
-    if (news && news.relevant_headlines && news.relevant_headlines.length) {
-      newsEl.innerHTML = '<b>Regulatory news evidence</b> (keyword heuristic, not NLP sentiment):<br>' +
-        news.relevant_headlines.map(function(h) {
-          var cls = h.tilt === 'bullish' ? 'up' : h.tilt === 'bearish' ? 'dn' : 'mut';
-          return '<span class="' + cls + '">[' + h.tilt + ']</span> ' + h.title;
-        }).join('<br>');
-    } else {
-      newsEl.textContent = 'No relevant regulatory/legislative headlines in the current feed.';
-    }
+    // The regulatory-news evidence list used to render here as its own
+    // small block; it's now folded into the single Market News ticker at
+    // the top of the page instead of duplicating a second news display.
+    // d.regulatory_news is still what the Regulatory News module above is
+    // actually scored on -- only the redundant text rendering was removed.
 
     var major = d.entry_rules_major;
     var verdictEl = document.getElementById('majorVerdict');

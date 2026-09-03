@@ -588,6 +588,21 @@ def status():
     guard_cfg = CFG.get("capital_guard", {})
     guard = CapitalGuard.load(**{k: guard_cfg[k] for k in CapitalGuard.__dataclass_fields__ if k in guard_cfg})
 
+    # MT5 is the other live venue this bot trades and, right now, the one
+    # actually funded -- the panel's headline numbers above are Hyperliquid-
+    # only, so without this the Account section reads $0 even while MT5 is
+    # live and tradeable. Best-effort: the bridge can be briefly unreachable
+    # (cellular tether), and that shouldn't take down the rest of /api/status.
+    mt5_balance = mt5_free_margin = None
+    mt5_error = None
+    try:
+        mt5 = _mt5_client()
+        mt5_balance = mt5.account_balance() / MT5_CENT_DIVISOR
+        mt5_free_margin = mt5.account_free_margin() / MT5_CENT_DIVISOR
+    except Exception as e:
+        mt5_error = f"{type(e).__name__}: {str(e)[:120]}"
+        app.logger.warning("MT5 balance unavailable for /api/status: %s", e)
+
     return jsonify({
         "venue": "testnet" if HL_CFG.get("testnet", True) else "mainnet",
         "armed": live_state.is_armed(),
@@ -597,6 +612,9 @@ def status():
         "config_min_confidence": CFG.get("screening", {}).get("min_confidence", 0.55),
         "account_value": acct.account_value,
         "withdrawable": acct.withdrawable,
+        "mt5_balance": mt5_balance,
+        "mt5_free_margin": mt5_free_margin,
+        "mt5_error": mt5_error,
         "open_positions": len(acct.positions),
         "watchlist_size": len(WATCHLIST),
         "capital_guard": {
