@@ -1,9 +1,14 @@
 symbol: BTC/USDT
 timeframe: 15m
-higher_timeframe: 1h
+# Higher-timeframe bias, raised 1h -> 4h at explicit user request: scan gold
+# and BTC for HIGH-timeframe trades, entered on the low timeframe. The 4h read
+# sets direction (SMCStrategy's htf_trend, and screening.py's top-down
+# alignment gate); mt5_timeframe below stays the entry timeframe. 1d is the
+# next step up if setups should be rarer and larger still.
+higher_timeframe: 4h
 
 # Venue: cex (Binance via CCXT) | evm (on-chain DEX) | mt5 (MetaTrader 5 bridge)
-venue: cex
+venue: mt5
 
 # SMC parameters
 swing_lookback: 5
@@ -15,6 +20,27 @@ liquidity_tolerance_pct: 0.0005
 risk_per_trade_pct: 1.0
 reward_risk_ratio: 2.0
 max_open_trades: 1
+
+# Structural stop-loss (bot/smc/strategy.py's order-block/FVG-boundary
+# invalidation), reinstated at explicit user request after a brief detour
+# through fixed 20% and 15% stops. Measured across 119 BTC setups in 3000
+# bars, the structural stop sits at a 0.48% median distance -- roughly 41x
+# tighter than the 20% fixed stop was, and the reason trades actually resolve
+# instead of sitting open for weeks. Paired with screening.max_stop_pct below,
+# which must stay tight enough to still gate on stop distance.
+stop_loss_pct: null
+
+# Staged fixed-dollar risk per trade, overriding risk_per_trade_pct above
+# when enabled — set at explicit user request: $3/trade while combined
+# capital+profit (both venues, via bot/combined_ledger.py) is below
+# threshold_usd, $6/trade once it reaches or exceeds it. Recomputed fresh
+# every pass against the live combined balance (bot/position_sizing.py's
+# staged_fixed_risk_usd/risk_pct_for_fixed_usd).
+fixed_risk_usd:
+  enabled: true
+  low: 3.0
+  high: 6.0
+  threshold_usd: 100.0
 
 # Paper trading
 initial_balance: 10000.0
@@ -28,28 +54,254 @@ evm_slippage_pct: 0.5
 # Symbol name must match your broker exactly, including any suffix
 # (e.g. EURUSD, XAUUSD, BTCUSD, EURUSD.r). Timeframe reuses the same
 # strings as above (1m/5m/15m/30m/1h/4h/1d).
-mt5_symbol: EURUSD
+# mt5_backend: bridge (default) needs a Windows box running mt5linux, set
+#              MT5_HOST/MT5_PORT/MT5_LOGIN/MT5_PASSWORD/MT5_SERVER in .env.
+#              metaapi needs no box of your own — set METAAPI_TOKEN plus the
+#              same MT5_LOGIN/MT5_PASSWORD/MT5_SERVER in .env.
+mt5_backend: bridge
+mt5_symbol: EURUSDc
 mt5_timeframe: 15m
+# Cent account: the broker reports balance/PnL in cents, not dollars
+# (100 units = $1). Position sizing is unaffected — tick_value is reported
+# in the same cent units, so the risk math is already self-consistent — this
+# flag only fixes the human-facing $ balance/PnL printouts.
+mt5_cent_account: true
+# Symbols to scan every poll cycle (each gets its own position slot; overrides
+# mt5_symbol above when set). Confirmed against this account's actual symbol
+# list — this broker's Cent account naming uses a trailing "c" suffix.
+# US30 (and every other index CFD) is NOT available on Exness Cent accounts —
+# checked directly against the account's symbol universe, not just Market
+# Watch — so it's left out; it needs a Standard/Zero/Pro account type instead.
+# Narrowed to gold and BTC at explicit user request. The four forex pairs and
+# ETH are dropped, not deleted — the previous list was:
+#   [EURUSDc, USDJPYc, GBPUSDc, GBPJPYc, XAUUSDc, BTCUSDc, ETHUSDc]
+# Paired with higher_timeframe: 4h above, this is the HTF-bias / LTF-entry
+# scan: 4h sets direction, mt5_timeframe (15m) times the entry.
+mt5_watchlist: [XAUUSDc, BTCUSDc]
 
 # Backtest defaults
 backtest_bars: 2000
 
-# Hyperliquid DeFi wallet + perps (long/short on one venue, testnet by default)
+# Hyperliquid DeFi wallet + perps (long/short on one venue)
 hyperliquid:
-  testnet: true
+  testnet: false
   default_leverage: 3
   # Majors — PAXG is tokenized gold; XMR is a listed perp (no Monero-chain custody)
-  majors: [BTC, ETH, SOL, HYPE, XMR, PAXG]
+  majors: [BTC, ETH, SOL, HYPE, WLD, XMR, PAXG]
   # Sample memecoins (k-prefixed = 1000x-denominated on Hyperliquid)
-  memecoins: [kPEPE, WIF, POPCAT, FARTCOIN, TRUMP, DOGE, GOAT, MOODENG, PNUT, kBONK, kSHIB, MELANIA]
+  memecoins: [kPEPE, WIF, POPCAT, FARTCOIN, TRUMP, DOGE, GOAT, MOODENG, PNUT, kBONK, kSHIB, MELANIA, BRETT]
 
 # Trade screening — a signal must clear ALL of these before it is approved to trade
 screening:
   min_confidence: 0.55     # SMC confluence score floor
   min_rr: 2.0              # minimum reward:risk
   sniper_confidence: 0.65  # confidence required for a "sniper" entry
-  max_stop_pct: 0.02       # tightest invalidation for a sniper entry (2%)
+  # Back to 0.02 now that stops are structural again (median 0.48% across
+  # 119 measured BTC setups, p95 25%). This is what makes the Sniper gate
+  # actually gate on stop distance instead of passing unconditionally -- a
+  # fixed stop paired with a loose ceiling (0.20/0.15, then 0.25/0.20) let
+  # every setup through regardless of how wide its stop was.
+  max_stop_pct: 0.02
+  # Require a market-structure shift (BOS or CHoCH) in the signal's own
+  # direction before a trade is approved, at explicit user request. The
+  # strategy already SCORES a recent break as confluence, but scoring is not
+  # gating: a setup could be approved on zones and a sweep alone, with
+  # structure never having shifted. This makes the shift mandatory.
+  require_structure_shift: true
+  structure_shift_bars: 20  # how recent the BOS/CHoCH must be
   ote_low: 0.618           # Fibonacci golden-pocket bounds (OTE zone)
   ote_high: 0.786
   liquidity_tolerance_pct: 0.0005  # equal-high/low tolerance for liquidity pools
   sweep_bars: 20           # a liquidity sweep must be this recent to confirm
+  # --- liquidity quality, all OFF (each changes which setups pass)
+  # htf_sweep: also read the sweep on higher_timeframe. The gate has only ever
+  # looked at the entry timeframe, so the 4h stop-hunt -- the more significant
+  # of the two -- was computed nowhere and influenced nothing.
+  # require_both: true is STRICTER than today (both timeframes must confirm);
+  # false is LOOSER and would approve setups the current gate rejects.
+  htf_sweep: false
+  htf_sweep_bars: 10
+  htf_sweep_require_both: true
+  # merge_pools: collapse duplicate levels. Every matching PAIR of bars
+  # currently emits its own pool, so one level touched 5 times yields 10
+  # near-identical entries -- why a 200-bar gold frame reports 343 "pools".
+  merge_pools: false
+  # require_reclaim: a level counts as swept only if price wicked through and
+  # CLOSED back. Without it "swept" also means a clean break -- price closing
+  # through and continuing, which is the opposite of a stop-hunt that reverses.
+  require_reclaim: false
+
+# Capital guard — daily-loss / drawdown circuit breaker + concurrent-risk caps.
+# Checked right before a --live order is sent; once halted it blocks new
+# entries until a new trading day starts or the balance recovers off its peak.
+capital_guard:
+  max_daily_loss_pct: 3.0
+  max_drawdown_pct: 10.0
+  max_concurrent_trades: 3
+  # Raised from 3.0 at explicit user request: fixed_risk_usd above means a
+  # single trade's risk_pct is now $3/combined_balance -- at the account's
+  # current ~$8 combined balance that's ~37.5%, which the old 3% cap would
+  # have blocked outright (silently, with no trade ever firing). This is a
+  # REAL loosening of a capital-preservation control, not a cosmetic
+  # change -- max_daily_loss_pct/max_drawdown_pct above are UNCHANGED and
+  # still the backstop if a trade goes against the account.
+  max_concurrent_open_risk_pct: 40.0
+  # Everything below is OFF by default (uncomment to enable) — added for the
+  # "self-evolving bot" blueprint's Section 7 breakers. Each is independent;
+  # turning one on doesn't change the others' behavior.
+  # max_weekly_loss_pct: 6.0             # halts for a fixed 48h once tripped
+  # consecutive_loss_limit: 3            # halves new-trade size until 2 wins in a row
+  # vix_halt_threshold: 30.0             # needs `vix=` passed into CapitalGuard.update()
+  # correlated_crash_btc_pct: -5.0       # both this AND spx_pct must trip together
+  # correlated_crash_spx_pct: -3.0
+  # liquidity_shock_spread_pct: 0.1
+  # liquidity_shock_volume_drop_pct: -50.0
+  # profit_lock_trigger_pct: 20.0        # check_profit_lock() reports a lock amount; a human executes the move
+  # profit_lock_fraction: 0.10
+
+# --- Extended SMC detectors (bot/smc/{breaker,mitigation,candles,volume_profile}.py)
+# Four detectors added for the concepts the ingested corpus discusses most but
+# nothing in bot/smc/ modelled. They REFINE the confidence of a setup the
+# existing confluence gate already approved — they are not extra points in that
+# gate's score, so they cannot push a sub-threshold setup over the entry bar and
+# manufacture a trade. extended_max_adjust bounds the refinement in BOTH
+# directions; the upward bound is the one that matters, since confidence feeds
+# final_pct and final_pct decides unattended auto-fire.
+# OFF: analyze() returns bit-identical signals to before these existed.
+smc:
+  extended_detectors: true
+  extended_max_adjust: 0.10
+  # Confluence credit for a NEUTRAL HTF read, at explicit user request. 0.0
+  # (default, unchanged) means neutral earns nothing toward the +0.25
+  # htf_trend bonus SMCStrategy awards for a CONFIRMED bullish/bearish HTF --
+  # today, that is identical to what an outright OPPOSING HTF earns: zero.
+  # This is a scoring ADDITION, not a gate being loosened -- TradeScreener's
+  # Top-down alignment check already passes on neutral HTF (it only rejects a
+  # DIRECTLY OPPOSING one), so there was no existing restriction on neutral to
+  # relax. Clamped in code to [0, 0.25): capped below the full bonus so "no
+  # opinion" can never outscore a genuinely confirmed HTF trend.
+  #
+  # Set to 0.10 at explicit user request ("reward corroboration in scoring").
+  # Measured against 3 weeks of real BTC history (Aug 9-30): baseline 78
+  # signals -> 83 at 0.10 (+5), average confidence shift +0.009 on shared
+  # signals. Small and deliberate -- this is a scoring nudge, not a new
+  # source of signals; see test_htf_neutral_credit_is_clamped_below_the_
+  # confirmed_trend_bonus for the invariant that keeps it from ever
+  # outweighing a real HTF match.
+  htf_neutral_credit: 0.10
+
+# --- Knowledge confluence (bot/knowledge.py)
+# Scores a live setup against the ingested transcript corpus (~1000 documents),
+# joining on the `maps_to` module names the corpus already carries. ADVISORY
+# ONLY: it moves final_pct by at most max_adjust_pct and can never change
+# whether a trade is approved. The corpus is unvetted third-party commentary
+# and does not get a vote on real orders.
+# corpus_path is relative to the working directory; the live checkout reaches
+# it through the `knowledge` symlink, which is NOT tracked in git, so set an
+# absolute path for any checkout that lacks it.
+# OFF: final_pct is computed exactly as before.
+knowledge:
+  enabled: true
+  corpus_path: knowledge/corpus.json
+  cache_path: .knowledge_weights.json
+  # 5.0 -> 7.5 at explicit user request ("reward corroboration in scoring").
+  # knowledge_pct IS a corroboration signal (how many detectors that fired
+  # are corpus-backed, damped noisy-OR combined) -- this raises how much that
+  # signal can move final_pct. Still bounded well below anything that could
+  # single-handedly cross a large gap to auto-fire, and `approved` still
+  # depends on it not at all -- this widens the NUDGE, not the corpus's
+  # authority. See bot/unified_screen.py's evaluate_unified docstring for the
+  # two properties that don't change: no vote on approval, always bounded.
+  max_adjust_pct: 7.5
+
+# --- Adaptive position sizing (bot/position_sizing.py)
+# Activates the regime / hotness / volatility / confidence multiplier chain,
+# which until now was computed for the dashboard but never allowed to change
+# what a live trade risks. The multipliers modulate the staged fixed-dollar
+# risk above; they do not replace it with a BASE_RISK_PCT lookup (that table
+# has no forex bucket, and most of mt5_watchlist is forex).
+#
+# TWO caps apply, and both are needed:
+#   - final_risk_pct()'s MAX_COMBINED_MULTIPLIER (3.0) is RELATIVE — against
+#     $3 staged risk it authorises $9, which exceeds this account outright.
+#   - max_multiple / max_risk_usd below are ABSOLUTE, in dollars. These are
+#     the ones that actually bound the downside on a small balance.
+# OFF: effective_risk_pct is exactly risk_pct_for_fixed_usd()'s result.
+position_sizing:
+  enabled: true
+  # 1.0, lowered from 1.5 at explicit user request after live sizing was
+  # observed pushing a trade from the staged $3.00 to $4.18 — 67% of an $8.27
+  # account — driven by the confidence multiplier (x1.45 at 97.7% confidence).
+  # At 1.0 the multiplier chain can still REDUCE risk below the staged figure
+  # when volatility or regime argue for it, but can never raise it above.
+  # The backtest had shown these multipliers reducing risk ($3.00 -> $2.08);
+  # live they amplified instead, so the relative cap was pinned at parity.
+  #
+  # Raised 1.0 -> 1.25 at explicit user request ("size up on stronger
+  # setups"). NOT a return to the 1.5 that caused the earlier amplification --
+  # deliberately more conservative, because the account is still small.
+  # On the balance at the time this was set ($9.51): ceiling $3.00 (31.5% of
+  # balance) -> $3.75 (39.4%). At 1.5 it would have been $4.50 (47.3%). The
+  # absolute max_risk_usd ceiling below still applies regardless of this
+  # multiple, and confidence_multiplier is only ONE of four factors in the
+  # chain (regime/hotness/volatility are the others, tied to market
+  # conditions rather than this setup's own strength) -- raising this ceiling
+  # widens what ALL four together can reach, not confidence alone.
+  max_multiple: 1.25
+  max_risk_usd: 5.0      # ...and never more than this many dollars, ever
+  # confidence_only, at explicit user request: when true, size purely on the
+  # setup's own confidence -- regime_alloc_weight/hotness_multiplier/
+  # volatility_adjust are neutralised to 1.0 rather than removed from the
+  # chain, so the same final_risk_pct math and the same max_multiple/
+  # max_risk_usd ceilings above still apply. false (default): all four
+  # factors participate, i.e. "size scales with signal strength AND market
+  # conditions" -- what was live before this flag existed.
+  # MT5 only -- the Hyperliquid loop (hypertrade.py) has never used this
+  # adaptive chain at all; it sizes on the flat staged fixed_risk_usd alone,
+  # a pre-existing scope boundary this flag does not change.
+  confidence_only: true
+
+# --- Positions this bot did not place
+# The account is also traded by hand, and MT5 reports every position on it,
+# not just this bot's. Orders from here carry magic 770077 (bot/mt5/client.py's
+# BOT_MAGIC); anything else reads as "manual" -- a human, another EA, or a
+# copy-trade feed.
+#
+# true (default): manual positions count toward max_open_trades, and the bot
+# never opens on a symbol that already has one. It still manages only its own
+# positions -- it will not touch, modify, or close a manual trade.
+# false: the bot ignores them entirely and can stack on top of your trades.
+respect_manual_positions: true
+
+# --- Realised-outcome grading (bot/trade_grades.py)
+# The ingested corpus weights each SMC concept by how often it is DISCUSSED
+# across ~1000 transcripts. That is popularity, not performance: the corpus
+# holds no win rate, no P&L, no backtest result. This records what this
+# account's own closed trades actually did, per detector, so those weights can
+# eventually be graded against outcomes instead of mentions.
+#
+# It records only. Nothing here changes sizing, entry, or exit, and no grade
+# is reported for a detector until it has MIN_SAMPLE (10) closed trades --
+# a 100% win rate off one trade is noise, and publishing it would look like
+# evidence.
+trade_grades: true
+trade_grades_path: trade_grades.json
+
+# --- Direction-fair smart-money scoring (bot/unified_screen.py)
+# final_pct averages SMC confidence with smart-money agreement, and agreement
+# is divided by all 9 modules. But only 6 can ever vote BUY and only 4 can ever
+# vote SELL -- gex, narrative_decay and session never emit a direction at all.
+#
+# So a maximally-agreed SHORT tops out at final_pct 72%, while a maximally-
+# agreed LONG reaches 83%. One auto_fire threshold applied to both is not one
+# standard: at 75% it is reachable for longs and arithmetically IMPOSSIBLE for
+# shorts, which makes the bot silently long-only.
+#
+# true: agreement is scored against what each direction can actually achieve,
+# so both reach 100% when fully agreed and one threshold means one thing.
+# false (default): the original /9 scoring, kept as the default because this
+# changes final_pct and final_pct decides unattended firing.
+# ON at explicit user request: "enforce best threshold for both shorts and
+# longs cleanly". Without it a short cannot cross a 75% threshold at any
+# confidence, so the bot was long-only by arithmetic rather than by choice.
+normalise_smart_money_by_direction: true

@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>TraderX Performance</title>
+<style>
+  :root {
+    --bg:#0a0b0d; --panel:#111318; --card:#15171d; --line:#22252c;
+    --tx:#eaecef; --mut:#8a8f98; --up:#16c784; --dn:#ea3943; --acc:#6c5ce7; --mt5:#3ba7ff; --warn:#e5a94d;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--tx);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    padding:24px 20px 60px; }
+  .wrap { max-width:1080px; margin:0 auto; }
+  nav { display:flex; align-items:center; gap:14px; margin-bottom:22px; }
+  nav a { color:var(--mut); text-decoration:none; font-size:13px; font-weight:600;
+    padding:7px 13px; border-radius:8px; border:1px solid var(--line); }
+  nav a.active { color:var(--tx); background:var(--card); border-color:var(--acc); }
+  header { margin-bottom:22px; }
+  h1 { font-size:22px; font-weight:700; margin:0 0 4px; letter-spacing:-.01em; }
+  .sub { color:var(--mut); font-size:13px; margin:0; }
+
+  .hero { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin:18px 0 22px;
+    background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:22px 24px; }
+  .hero .big { font-size:40px; font-weight:800; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+  .hero .chg { font-size:16px; font-weight:700; padding:4px 10px; border-radius:8px; }
+  .hero .chg.up { color:var(--up); background:rgba(22,199,132,.14); }
+  .hero .chg.dn { color:var(--dn); background:rgba(234,57,67,.14); }
+  .hero .lbl { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.04em;
+    width:100%; margin-top:-6px; }
+
+  .stat-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; margin-bottom:22px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+  .stat .l { font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.03em; }
+  .stat .v { font-size:20px; font-weight:700; margin-top:4px; font-variant-numeric:tabular-nums; }
+  .stat .v2 { font-size:11px; color:var(--mut); margin-top:2px; }
+
+  section { background:var(--panel); border:1px solid var(--line); border-radius:16px;
+    padding:18px 20px; margin-bottom:20px; }
+  h2 { font-size:14px; font-weight:700; margin:0 0 14px; letter-spacing:.02em; display:flex;
+    align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .legend { display:flex; gap:16px; font-size:12px; font-weight:600; color:var(--mut); }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .legend i { width:9px; height:9px; border-radius:50%; display:inline-block; }
+
+  .chart-box { position:relative; width:100%; }
+  svg#chartSvg { width:100%; height:260px; display:block; }
+  .empty { color:var(--mut); font-size:13px; padding:30px 4px; text-align:center; }
+
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; color:var(--mut); font-weight:600; font-size:11px; text-transform:uppercase;
+    letter-spacing:.02em; padding:6px 10px; border-bottom:1px solid var(--line); }
+  td { padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  tr:last-child td { border-bottom:none; }
+  tr:hover td { background:rgba(255,255,255,.02); }
+  .up { color:var(--up); } .dn { color:var(--dn); } .mut { color:var(--mut); }
+  .venue-tag { font-size:10px; text-transform:uppercase; padding:2px 7px; border-radius:6px; font-weight:700; }
+  .venue-tag.mt5 { background:rgba(59,167,255,.16); color:var(--mt5); }
+  .venue-tag.hl { background:rgba(108,92,231,.18); color:#8b7bf0; }
+  .warn-banner { color:var(--warn); font-size:12px; padding:8px 12px; background:rgba(229,169,77,.1);
+    border-radius:8px; margin-bottom:12px; }
+  .news-item { display:block; padding:11px 4px; border-bottom:1px solid var(--line);
+    text-decoration:none; color:var(--tx); }
+  .news-item:last-child { border-bottom:none; }
+  .news-item:hover .news-title { color:var(--mt5); }
+  .news-title { font-size:13px; font-weight:600; }
+  .news-time { font-size:11px; color:var(--mut); margin-top:3px; }
+  footer { color:var(--mut); font-size:12px; margin-top:10px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a href="/">Control Panel</a>
+    <a href="/performance" class="active">Performance</a>
+  </nav>
+  <header>
+    <h1>Performance</h1>
+    <p class="sub">Realized P&amp;L, win rate, and trade history for the live MT5 (Exness) account — read-only, real account data only.</p>
+  </header>
+
+  <div class="hero">
+    <div class="lbl">Live P&amp;L — live account (realized + open)</div>
+    <div class="big" id="heroPnl">—</div>
+    <div class="chg" id="heroWinRate">—</div>
+    <div class="lbl" id="heroBreakdown" style="margin-top:6px;">—</div>
+  </div>
+
+  <div class="stat-row" id="statRow">
+    <div class="stat"><div class="l">Account balance</div><div class="v" id="statMt5Balance">—</div></div>
+    <div class="stat"><div class="l">Open positions</div><div class="v" id="statOpenCount">—</div></div>
+    <div class="stat"><div class="l">Total trades (30d)</div><div class="v" id="statTradeCount">—</div></div>
+    <div class="stat">
+      <div class="l">BTC live price</div>
+      <div class="v" id="statBtcPrice">—</div>
+      <div class="v2"><span id="statBtc24h">—</span> &nbsp;·&nbsp; <span id="statBtc7d">—</span></div>
+    </div>
+  </div>
+
+  <div class="stat-row" id="statRowPct">
+    <div class="stat">
+      <div class="l">24h P&amp;L</div>
+      <div class="v" id="stat24hPct">—</div>
+      <div class="v2" id="stat24hUsd">—</div>
+    </div>
+    <div class="stat">
+      <div class="l">7d P&amp;L</div>
+      <div class="v" id="stat7dPct">—</div>
+      <div class="v2" id="stat7dUsd">—</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>
+      Equity curve — cumulative realized P&amp;L
+      <span class="legend">
+        <span><i style="background:var(--mt5)"></i>MT5 live account</span>
+      </span>
+    </h2>
+    <div class="chart-box">
+      <svg id="chartSvg" viewBox="0 0 900 260" preserveAspectRatio="none"></svg>
+      <div class="empty" id="chartEmpty" style="display:none;">No closed trades yet — chart fills in as positions close.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Open positions</h2>
+    <table id="posTable">
+      <thead><tr><th>Symbol</th><th>Side</th><th>Size</th><th>Entry</th><th>P&amp;L</th></tr></thead>
+      <tbody id="posBody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Closed trades — last 24h</h2>
+    <table id="tradeTable">
+      <thead><tr><th>Symbol</th><th>Side</th><th>Price</th><th>P&amp;L</th><th>Time</th></tr></thead>
+      <tbody id="tradeBody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Watchlist — MT5 + crypto</h2>
+    <table id="watchlistTable">
+      <thead><tr><th>Venue</th><th>Symbol</th><th>Bid / Ask</th><th>Price</th><th>24h</th><th>7d</th></tr></thead>
+      <tbody id="watchlistBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Forex market news</h2>
+    <div id="newsList"><div class="empty">Loading…</div></div>
+  </section>
+
+  <footer>Local performance view · 127.0.0.1 only · read-only, places no orders</footer>
+</div>
+<script>
+var COLOR_UP = '#16c784', COLOR_DN = '#ea3943', COLOR_MT5 = '#3ba7ff';
+
+function fmtUsd(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+function fmtNum(v, d) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return Number(v).toLocaleString(undefined, {maximumFractionDigits: d || 6});
+}
+function fmtPct(v) {
+  if (v === null || v === undefined) return '—';
+  return (v * 100).toFixed(0) + '%';
+}
+function fmtSignedPct(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+}
+function fmtTime(ms) {
+  var d = new Date(ms);
+  return d.toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+}
+function fmtAxisDate(ms) {
+  var d = new Date(ms);
+  return d.toLocaleString(undefined, {month:'short', day:'numeric'});
+}
+function fmtRelTime(ms) {
+  if (!ms) return '';
+  var diffMin = Math.round((Date.now() - ms) / 60000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return diffMin + 'm ago';
+  var diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24) return diffHr + 'h ago';
+  return Math.round(diffHr / 24) + 'd ago';
+}
+
+async function api(path) {
+  var res = await fetch(path);
+  var data = await res.json().catch(function(){ return {}; });
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+function buildPath(points, xScale, yScale, zeroY) {
+  if (!points.length) return {line: '', area: ''};
+  var line = points.map(function(p, i) {
+    return (i === 0 ? 'M' : 'L') + xScale(p.time).toFixed(1) + ',' + yScale(p.value).toFixed(1);
+  }).join(' ');
+  var last = points[points.length - 1], first = points[0];
+  var area = line + ' L' + xScale(last.time).toFixed(1) + ',' + zeroY.toFixed(1) +
+             ' L' + xScale(first.time).toFixed(1) + ',' + zeroY.toFixed(1) + ' Z';
+  return {line: line, area: area};
+}
+
+function renderChart(points) {
+  var W = 900, H = 260;
+  var PADL = 64, PADR = 12, PADT = 14, PADB = 26;
+  var svg = document.getElementById('chartSvg');
+  var emptyEl = document.getElementById('chartEmpty');
+
+  if (!points.length) {
+    emptyEl.style.display = 'block';
+    svg.style.display = 'none';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  svg.style.display = 'block';
+
+  var minT = Math.min.apply(null, points.map(function(p){ return p.time; }));
+  var maxT = Math.max.apply(null, points.map(function(p){ return p.time; }));
+  var vals = points.map(function(p){ return p.value; }).concat([0]);
+  var minV = Math.min.apply(null, vals);
+  var maxV = Math.max.apply(null, vals);
+  var vRange = (maxV - minV) || 1;
+  var tRange = (maxT - minT) || 1;
+
+  function xScale(t) { return PADL + (t - minT) / tRange * (W - PADL - PADR); }
+  function yScale(v) { return H - PADB - (v - minV) / vRange * (H - PADT - PADB); }
+
+  var parts = [];
+  parts.push(
+    '<defs>' +
+    '<linearGradient id="grad-mt5" x1="0" y1="0" x2="0" y2="1">' +
+      '<stop offset="0%" stop-color="' + COLOR_MT5 + '" stop-opacity="0.55"/>' +
+      '<stop offset="100%" stop-color="' + COLOR_MT5 + '" stop-opacity="0"/>' +
+    '</linearGradient>' +
+    '</defs>'
+  );
+
+  // Y-axis gridlines + $ labels, top to bottom.
+  for (var i = 0; i <= 3; i++) {
+    var y = PADT + i * (H - PADT - PADB) / 3;
+    var v = maxV - i * vRange / 3;
+    parts.push('<line x1="' + PADL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PADR) + '" y2="' + y.toFixed(1) + '" stroke="#22252c" stroke-width="1"/>');
+    parts.push('<text x="' + (PADL - 8) + '" y="' + (y + 3).toFixed(1) + '" text-anchor="end" font-size="10" fill="#8a8f98">' + fmtUsd(v) + '</text>');
+  }
+  if (minV < 0 && maxV > 0) {
+    var zy = yScale(0);
+    parts.push('<line x1="' + PADL + '" y1="' + zy.toFixed(1) + '" x2="' + (W - PADR) + '" y2="' + zy.toFixed(1) + '" stroke="#8a8f98" stroke-width="1" stroke-dasharray="3,3"/>');
+  }
+
+  // X-axis date labels: start, middle, end.
+  [0, 0.5, 1].forEach(function(frac) {
+    var t = minT + frac * tRange;
+    var x = xScale(t);
+    var anchor = frac === 0 ? 'start' : (frac === 1 ? 'end' : 'middle');
+    parts.push('<text x="' + x.toFixed(1) + '" y="' + (H - 6) + '" text-anchor="' + anchor + '" font-size="10" fill="#8a8f98">' + fmtAxisDate(t) + '</text>');
+  });
+
+  var zeroY = yScale(Math.max(minV, 0));
+  var p = buildPath(points, xScale, yScale, zeroY);
+  parts.push('<path d="' + p.area + '" fill="url(#grad-mt5)"/>');
+  parts.push('<path d="' + p.line + '" fill="none" stroke="' + COLOR_MT5 + '" stroke-width="2"/>');
+
+  svg.innerHTML = parts.join('');
+}
+
+function renderPositions(mt5) {
+  var body = document.getElementById('posBody');
+  body.innerHTML = '';
+  var rows = mt5.open_positions || [];
+  document.getElementById('statOpenCount').textContent = rows.length;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5" class="empty">No open positions.</td></tr>';
+    return;
+  }
+  rows.forEach(function(p) {
+    var pnl = p.profit;
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><b>' + p.symbol + '</b></td>' +
+      '<td>' + (p.side || '').toUpperCase() + '</td>' +
+      '<td>' + fmtNum(p.volume) + '</td>' +
+      '<td>' + fmtNum(p.price_open) + '</td>' +
+      '<td class="' + (pnl >= 0 ? 'up' : 'dn') + '">' + fmtUsd(pnl) + '</td>';
+    body.appendChild(tr);
+  });
+}
+
+function renderTrades(mt5) {
+  var body = document.getElementById('tradeBody');
+  body.innerHTML = '';
+  var cutoff = Date.now() - 24 * 3600 * 1000;
+  var rows = (mt5.recent_trades || []).filter(function(r) { return r.time >= cutoff; });
+  rows.sort(function(a, b) { return b.time - a.time; });
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5" class="empty">No closed trades in the last 24 hours.</td></tr>';
+    return;
+  }
+  rows.forEach(function(r) {
+    var tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><b>' + r.symbol + '</b></td>' +
+      '<td>' + (r.side || '—').toUpperCase() + '</td>' +
+      '<td>' + fmtNum(r.price) + '</td>' +
+      '<td class="' + (r.pnl >= 0 ? 'up' : 'dn') + '">' + fmtUsd(r.pnl) + '</td>' +
+      '<td class="mut">' + fmtTime(r.time) + '</td>';
+    body.appendChild(tr);
+  });
+}
+
+function pctCell(v) {
+  if (v === null || v === undefined || isNaN(v)) return '<span class="mut">—</span>';
+  return '<span class="' + (v >= 0 ? 'up' : 'dn') + '">' + fmtSignedPct(v) + '</span>';
+}
+
+function renderWatchlist(rows) {
+  var body = document.getElementById('watchlistBody');
+  body.innerHTML = '';
+  rows = rows || [];
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">No watchlist symbols configured.</td></tr>';
+    return;
+  }
+  rows.forEach(function(w) {
+    var isHl = w.venue === 'hl';
+    var tag = '<span class="venue-tag ' + (isHl ? 'hl' : 'mt5') + '">' + (isHl ? 'HL' : 'MT5') + '</span>';
+    var tr = document.createElement('tr');
+    if (w.error || w.mid === undefined) {
+      tr.innerHTML =
+        '<td>' + tag + '</td>' +
+        '<td><b>' + w.symbol + '</b></td>' +
+        '<td class="mut" colspan="4">unavailable</td>';
+    } else {
+      // HL rows have no bid/ask (one-shot mark price) and no 7d — show a dash.
+      var bidask = (w.bid !== undefined) ? (fmtNum(w.bid) + ' / ' + fmtNum(w.ask)) : '—';
+      tr.innerHTML =
+        '<td>' + tag + '</td>' +
+        '<td><b>' + w.symbol + '</b></td>' +
+        '<td class="mut">' + bidask + '</td>' +
+        '<td>' + fmtNum(w.mid) + '</td>' +
+        '<td>' + pctCell(w.change_24h_pct) + '</td>' +
+        '<td>' + pctCell(w.change_7d_pct) + '</td>';
+    }
+    body.appendChild(tr);
+  });
+}
+
+async function refresh() {
+  try {
+    var data = await api('/api/performance');
+    var mt5 = data.mt5 && !data.mt5.error ? data.mt5 : {};
+
+    if (data.mt5 && data.mt5.error) {
+      console.warn('mt5 unavailable:', data.mt5.error);
+    }
+
+    var realizedPnl = mt5.realized_pnl_usd || 0;
+    var unrealizedPnl = mt5.unrealized_pnl_usd || 0;
+    var livePnl = mt5.live_pnl_usd !== undefined ? mt5.live_pnl_usd : (realizedPnl + unrealizedPnl);
+    var heroPnl = document.getElementById('heroPnl');
+    heroPnl.textContent = fmtUsd(livePnl);
+    heroPnl.className = 'big ' + (livePnl >= 0 ? 'up' : 'dn');
+    var breakdownEl = document.getElementById('heroBreakdown');
+    breakdownEl.innerHTML = 'Realized (30d): <span class="' + (realizedPnl >= 0 ? 'up' : 'dn') + '">' + fmtUsd(realizedPnl) + '</span>' +
+      ' &nbsp;·&nbsp; Open positions: <span class="' + (unrealizedPnl >= 0 ? 'up' : 'dn') + '">' + fmtUsd(unrealizedPnl) + '</span>';
+
+    var totalTrades = mt5.trade_count || 0;
+    var totalWins = mt5.wins || 0;
+    var winRateEl = document.getElementById('heroWinRate');
+    if (totalTrades > 0) {
+      var wr = totalWins / totalTrades;
+      winRateEl.textContent = fmtPct(wr) + ' win rate · ' + totalTrades + ' trades';
+      winRateEl.className = 'chg ' + (wr >= 0.5 ? 'up' : 'dn');
+    } else {
+      winRateEl.textContent = 'No closed trades yet';
+      winRateEl.className = 'chg';
+    }
+
+    document.getElementById('statMt5Balance').textContent = fmtUsd(mt5.balance_usd);
+    document.getElementById('statTradeCount').textContent = totalTrades;
+
+    var btcEl = document.getElementById('statBtcPrice');
+    var btc24hEl = document.getElementById('statBtc24h');
+    var btc7dEl = document.getElementById('statBtc7d');
+    if (mt5.btc_price) {
+      btcEl.textContent = fmtUsd(mt5.btc_price.mid);
+      var c24 = mt5.btc_price.change_24h_pct;
+      btc24hEl.textContent = fmtSignedPct(c24) + ' 24h';
+      btc24hEl.className = (c24 === null || c24 === undefined || isNaN(c24)) ? 'mut' : (c24 >= 0 ? 'up' : 'dn');
+      var c7 = mt5.btc_price.change_7d_pct;
+      btc7dEl.textContent = fmtSignedPct(c7) + ' 7d';
+      btc7dEl.className = (c7 === null || c7 === undefined || isNaN(c7)) ? 'mut' : (c7 >= 0 ? 'up' : 'dn');
+    } else {
+      btcEl.textContent = '—';
+      btc24hEl.textContent = '—';
+      btc24hEl.className = '';
+      btc7dEl.textContent = '—';
+      btc7dEl.className = '';
+    }
+
+    var pnl24h = mt5.pnl_24h_usd || 0;
+    var el24Pct = document.getElementById('stat24hPct');
+    el24Pct.textContent = fmtSignedPct(mt5.pnl_24h_pct);
+    el24Pct.className = 'v ' + (pnl24h >= 0 ? 'up' : 'dn');
+    document.getElementById('stat24hUsd').textContent = fmtUsd(pnl24h);
+
+    var pnl7d = mt5.pnl_7d_usd || 0;
+    var el7dPct = document.getElementById('stat7dPct');
+    el7dPct.textContent = fmtSignedPct(mt5.pnl_7d_pct);
+    el7dPct.className = 'v ' + (pnl7d >= 0 ? 'up' : 'dn');
+    document.getElementById('stat7dUsd').textContent = fmtUsd(pnl7d);
+
+    renderChart(mt5.equity_curve || []);
+    renderPositions(mt5);
+    renderTrades(mt5);
+    renderWatchlist(data.watchlist);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function refreshNews() {
+  var list = document.getElementById('newsList');
+  try {
+    var data = await api('/api/news');
+    var items = data.items || [];
+    if (!items.length) {
+      list.innerHTML = '<div class="empty">No headlines available right now.</div>';
+      return;
+    }
+    list.innerHTML = items.map(function(n) {
+      var safeTitle = (n.title || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+      var timeTxt = fmtRelTime(n.time);
+      return '<a class="news-item" href="' + (n.link || '#') + '" target="_blank" rel="noopener">' +
+        '<div class="news-title">' + safeTitle + '</div>' +
+        (timeTxt ? '<div class="news-time">' + timeTxt + '</div>' : '') +
+        '</a>';
+    }).join('');
+  } catch (e) {
+    console.error(e);
+    list.innerHTML = '<div class="empty">News feed unavailable right now.</div>';
+  }
+}
+
+refresh();
+refreshNews();
+setInterval(refresh, 15000);
+setInterval(refreshNews, 60000);
+</script>
+</body>
+</html>

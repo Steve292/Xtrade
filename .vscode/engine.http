@@ -1,0 +1,21 @@
+### Health Check
+GET http://localhost:8000/health
+
+### Extract Entities
+POST http://localhost:8000/extract
+Content-Type: application/json
+
+{
+  "content": "Apple Inc. revenue was $89.5B in Q4 2024.",
+  "content_type": "text",
+  "extraction_type": "entities"
+}
+
+### Rewrite Content
+POST http://localhost:8000/edit/rewrite
+Content-Type: application/json
+
+{
+  "content": "Our app is super cool and stuff...",
+  "style": {"tone": "professional", "length": "concise"}
+}

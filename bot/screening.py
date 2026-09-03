@@ -2,14 +2,19 @@
 Trade screener — the approval gate.
 
 A signal from the SMC strategy is only allowed to trade if it clears EVERY one
-of six checks:
+of seven checks:
 
   1. SMC confluence     — the strategy actually found a scored setup
   2. Top-down alignment — the higher timeframe bias does not oppose the trade
   3. Liquidity sweep     — a stop-hunt in the trade direction is confirmed
   4. Risk management     — reward:risk clears the minimum and the stop is valid
-  5. Sniper entry        — high confluence AND a tight invalidation
-  6. Fibonacci (OTE)     — FINAL gate: entry sits in the 0.618-0.786 golden pocket
+  5. Sniper entry        — high confluence AND the stop within max_stop_pct
+                            (raised to accommodate a fixed 20% stop-loss —
+                            see bot/smc/strategy.py's stop_loss_pct — no
+                            longer "tight" by design, at explicit user
+                            request)
+  6. Supply/Demand       — entry sits at a demand (long) or supply (short) zone
+  7. Fibonacci (OTE)     — FINAL gate: entry sits in the 0.618-0.786 golden pocket
 
 Fibonacci runs last by design: a trade is only approved once everything else
 holds AND price is at the optimal entry in the pocket.
@@ -28,7 +33,8 @@ import pandas as pd
 from bot.smc.fibonacci import ote_band, recent_leg
 from bot.smc.liquidity import detect_liquidity_pools, recent_sweep
 from bot.smc.strategy import Signal, SignalType
-from bot.smc.structure import Trend, detect_trend, find_swing_points
+from bot.smc.structure import Trend, detect_structure_breaks, detect_trend, find_swing_points
+from bot.smc.supply_demand import detect_supply_demand_zones, nearest_zone
 
 
 @dataclass
@@ -59,12 +65,33 @@ class ScreenConfig:
     min_confidence: float = 0.55
     min_rr: float = 2.0
     sniper_confidence: float = 0.65
-    max_stop_pct: float = 0.02  # tight invalidation for a sniper entry (2%)
+    max_stop_pct: float = 0.25  # raised from 2% to fit the fixed 20% stop-loss + headroom
     ote_low: float = 0.618
     ote_high: float = 0.786
     swing_lookback: int = 5
     liquidity_tolerance_pct: float = 0.0005  # equal-high/low tolerance for pools
     sweep_bars: int = 20  # a liquidity sweep must be this recent to confirm
+    # Also read the sweep on the HIGHER timeframe. The gate has only ever
+    # looked at the entry timeframe, so a 4h stop-hunt -- the more significant
+    # of the two -- was computed nowhere and influenced nothing.
+    # OFF: the check reports LTF only, exactly as before.
+    htf_sweep: bool = False
+    htf_sweep_bars: int = 10  # recency window on the HTF's own bars
+    # When htf_sweep is on: require BOTH timeframes to confirm, or accept
+    # either. Requiring both is strictly stricter than today; accepting either
+    # is strictly looser, and would approve setups the current gate rejects.
+    htf_sweep_require_both: bool = True
+    # Merge duplicate pool levels and require a reclaim (wick through, close
+    # back) before a level counts as swept. Both default off: they change
+    # which setups pass, and that belongs behind a flag.
+    merge_pools: bool = False
+    require_reclaim: bool = False
+    # Require a market-structure shift (BOS/CHoCH) in the signal's direction.
+    # SMCStrategy already scores a recent break as confluence, but scoring is
+    # not gating: without this a setup can be approved on zones and a sweep
+    # alone, with structure never actually having shifted in its favour.
+    require_structure_shift: bool = False
+    structure_shift_bars: int = 20
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
@@ -102,14 +129,56 @@ class TradeScreener:
 
         # 3. Liquidity sweep — a stop-hunt in the trade direction must be confirmed
         #    (long needs sell-side liquidity swept; short needs buy-side swept)
-        pools = detect_liquidity_pools(df, cfg.liquidity_tolerance_pct)
+        pools = detect_liquidity_pools(
+            df, cfg.liquidity_tolerance_pct,
+            merge=cfg.merge_pools, require_reclaim=cfg.require_reclaim,
+        )
         sweep = recent_sweep(pools, df, bars=cfg.sweep_bars)
         want_side = "sell_side" if direction == "long" else "buy_side"
-        swept = sweep is not None and sweep.kind == want_side
-        checks.append(Check(
-            "Liquidity sweep", swept,
-            f"{sweep.kind if sweep else 'none'} (need {want_side})",
-        ))
+        ltf_swept = sweep is not None and sweep.kind == want_side
+        detail = f"{sweep.kind if sweep else 'none'} (need {want_side})"
+        swept = ltf_swept
+
+        if cfg.htf_sweep and htf_df is not None and len(htf_df) >= 20:
+            htf_pools = detect_liquidity_pools(
+                htf_df, cfg.liquidity_tolerance_pct,
+                merge=cfg.merge_pools, require_reclaim=cfg.require_reclaim,
+            )
+            htf_sweep = recent_sweep(htf_pools, htf_df, bars=cfg.htf_sweep_bars)
+            htf_swept = htf_sweep is not None and htf_sweep.kind == want_side
+            swept = (ltf_swept and htf_swept) if cfg.htf_sweep_require_both \
+                else (ltf_swept or htf_swept)
+            detail = (f"LTF {sweep.kind if sweep else 'none'} / "
+                      f"HTF {htf_sweep.kind if htf_sweep else 'none'} "
+                      f"(need {want_side}, "
+                      f"{'both' if cfg.htf_sweep_require_both else 'either'})")
+
+        checks.append(Check("Liquidity sweep", swept, detail))
+
+        # 3b. Market structure shift — a BOS or CHoCH must have occurred in the
+        #     signal's own direction, recently. Placed before the risk checks
+        #     so a structurally unsupported setup is rejected on the reason
+        #     that actually disqualifies it.
+        if cfg.require_structure_shift:
+            # StructureEvent.direction is bullish/bearish; signal.type is
+            # long/short. Translate rather than compare across vocabularies —
+            # a silent mismatch here would make the gate reject everything.
+            direction_word = "bullish" if direction == "long" else "bearish"
+            swings = find_swing_points(df, cfg.swing_lookback)
+            events = detect_structure_breaks(df, swings)
+            cutoff = len(df) - cfg.structure_shift_bars
+            aligned = [
+                e for e in events
+                if e.direction == direction_word and e.index >= cutoff
+            ]
+            latest = aligned[-1] if aligned else None
+            checks.append(Check(
+                "Market structure shift", latest is not None,
+                (f"{latest.kind.upper()} {latest.direction} "
+                 f"{len(df) - 1 - latest.index} bars ago"
+                 if latest else
+                 f"no {direction_word} BOS/CHoCH in {cfg.structure_shift_bars} bars"),
+            ))
 
         # 4. Risk management — reward:risk and a valid stop
         risk = abs(signal.entry - signal.stop_loss)
@@ -130,10 +199,25 @@ class TradeScreener:
             f"conf {signal.confidence:.0%}, stop {stop_pct:.2%} (max {cfg.max_stop_pct:.0%})",
         ))
 
-        # 6. Fibonacci OTE — the FINAL gate: entry must be in the golden pocket
+        swings = find_swing_points(df, cfg.swing_lookback)
+
+        # 6. Supply & Demand — the entry must sit at a genuine institutional
+        #    zone: a demand zone (long) or supply zone (short) that a prior
+        #    impulse originated from. Structural confirmation that price is at
+        #    a level smart money is likely defending, not mid-air.
+        sd_zones = detect_supply_demand_zones(df, swings)
+        want_zone = "demand" if direction == "long" else "supply"
+        at_zone = nearest_zone(signal.entry, sd_zones, want_zone) is not None
+        n_zones = sum(1 for z in sd_zones if z.kind == want_zone)
+        checks.append(Check(
+            "Supply/Demand", at_zone,
+            f"{'in ' + want_zone + ' zone' if at_zone else 'not at a ' + want_zone + ' zone'} "
+            f"({n_zones} {want_zone} zone{'s' if n_zones != 1 else ''} active)",
+        ))
+
+        # 7. Fibonacci OTE — the FINAL gate: entry must be in the golden pocket
         #    of the recent leg. Runs last so a trade is only approved once every
         #    other condition holds AND price is at the optimal entry.
-        swings = find_swing_points(df, cfg.swing_lookback)
         leg = recent_leg(swings, direction)
         if leg is None:
             checks.append(Check("Fibonacci OTE (final)", False, "no clean leg"))

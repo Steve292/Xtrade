@@ -61,6 +61,12 @@ def main() -> None:
         fvg_min_size_pct=config.get("fvg_min_size_pct", 0.001),
         liquidity_tolerance_pct=config.get("liquidity_tolerance_pct", 0.0005),
         reward_risk_ratio=config.get("reward_risk_ratio", 2.0),
+        # Extended detectors, so a backtest can A/B them against the same
+        # bars. stop_loss_pct is still deliberately NOT passed here — see
+        # SMCStrategy.__init__; that override is live-path only.
+        extended_detectors=config.get("smc", {}).get("extended_detectors", False),
+        extended_max_adjust=config.get("smc", {}).get("extended_max_adjust", 0.10),
+        htf_neutral_credit=config.get("smc", {}).get("htf_neutral_credit", 0.0),
     )
 
     if args.csv:

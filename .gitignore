@@ -7,3 +7,51 @@ __pycache__/
 # DeFi wallet keystore — NEVER commit private keys
 wallet_testnet.json
 *.wallet
+*.bak
+
+# Env file backups/variants — NEVER commit credentials
+.env.save
+.env.local
+.env.bak
+
+# Service logs
+logs/
+
+# Capital guard runtime state (local only, not shared config)
+capital_guard_state.json
+combined_guard_state.json
+combined_guard_state.json.bak.*
+live_state.json
+dominance_history.json
+
+# Personal Claude Code permissions (local-only, not shared project config)
+.claude/settings.local.json
+
+# Local Codex CLI session state (machine-specific, not shared project config)
+.codex/
+
+# Stray machine-local files that ended up in the repo root, not project data
+bugreport-sdk_gphone64_arm64-*.zip
+msedgewebview2.dxvk-cache
+settings.dat
+pending_trades.json
+
+# Knowledge confluence runtime artifacts (bot/knowledge.py)
+# The corpus itself lives outside the repo and is reached through a symlink
+# that is intentionally not tracked; the weights file is a derived cache.
+knowledge
+knowledge_candidates.json
+knowledge_channels.json
+.knowledge_weights.json
+
+# Local dev virtualenv used for running the test suite
+.devvenv/
+
+# Realised-outcome grading store (bot/trade_grades.py) — this account's own
+# closed trades, not source.
+trade_grades.json
+
+# Hourly SMC analysis output (bot/hourly_report.py / scripts/hourly_analysis.py)
+logs/hourly_analysis.log
+logs/hourly-analysis-launchd.log
+hourly_analysis_latest.json

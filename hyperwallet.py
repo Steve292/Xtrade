@@ -12,6 +12,7 @@ DeFi wallet + Hyperliquid perps CLI (TESTNET by default).
     python hyperwallet.py long  BTC 50 --lev 5   # long $50 of BTC at 5x
     python hyperwallet.py short XMR 25           # short $25 of Monero
     python hyperwallet.py close SOL              # close the SOL position
+    python hyperwallet.py protect POPCAT 0.0440 0.0465   # attach SL/TP to an open position
 
 Long/short work on any listed perp — BTC, ETH, SOL, HYPE, PAXG (gold), XMR, and
 200+ memecoins. Trading commands need a wallet funded from the testnet faucet.
@@ -132,6 +133,20 @@ def cmd_close(args, hl):
     print(client.close(args.coin))
 
 
+def cmd_protect(args, hl):
+    client = client_for(hl, need_wallet=True)
+    acct = client.account()
+    pos = next((p for p in acct.positions if p.coin.upper() == args.coin.upper()), None)
+    if pos is None:
+        sys.exit(f"No open position for {args.coin}.")
+    print(f"Attaching SL {args.sl:g} / TP {args.tp:g} to {pos.side.upper()} {pos.size:g} {pos.coin} "
+          f"(entry {pos.entry:g})...")
+    result = client.attach_bracket(
+        pos.coin, is_buy=(pos.side == "long"), size=pos.size, stop_loss=args.sl, take_profit=args.tp
+    )
+    print(result)
+
+
 def main() -> None:
     load_dotenv()
     hl = load_hl_config()
@@ -159,6 +174,12 @@ def main() -> None:
     p_close = sub.add_parser("close")
     p_close.add_argument("coin")
     p_close.set_defaults(func=cmd_close)
+
+    p_protect = sub.add_parser("protect")
+    p_protect.add_argument("coin")
+    p_protect.add_argument("sl", type=float)
+    p_protect.add_argument("tp", type=float)
+    p_protect.set_defaults(func=cmd_protect)
 
     args = parser.parse_args()
     args.func(args, hl)

@@ -1,0 +1,34 @@
+#!/bin/bash
+# TraderX desktop launcher.
+# Launched by macOS LaunchServices (double-click), which provides only a
+# minimal PATH and an arbitrary CWD — so every tool is referenced by an
+# absolute path and we never rely on `source venv/bin/activate` resolving
+# `python` correctly. The venv interpreter is invoked directly.
+DIR="/Users/mac/Projects/smc-trading-bot"
+PY="$DIR/venv/bin/python"
+LSOF="/usr/sbin/lsof"
+PORT=8420
+URL="http://127.0.0.1:$PORT"
+
+# The venv python is a universal binary but numpy/pandas are compiled arm64-only.
+# LaunchServices starts the app under x86_64 (Rosetta), where those arm64 .so
+# files fail to load (numpy raises a misleading "source directory" error). Force
+# native arm64 so the compiled extensions match the interpreter's architecture.
+ARCH="/usr/bin/arch -arm64"
+
+cd "$DIR" || exit 1
+
+# Start the local dashboard server only if it isn't already listening.
+if ! "$LSOF" -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
+    mkdir -p logs
+    nohup $ARCH "$PY" webapp/server.py >> logs/dashboard.log 2>&1 &
+    # Wait (up to ~10s) for the server to bind before opening the browser,
+    # so the first page load doesn't race server startup.
+    for i in $(seq 1 20); do
+        "$LSOF" -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1 && break
+        sleep 0.5
+    done
+fi
+
+# The visible result: the TraderX control panel opens in the default browser.
+/usr/bin/open "$URL"

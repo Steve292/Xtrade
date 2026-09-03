@@ -1,0 +1,29 @@
+version: "3.8"
+services:
+  engine:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      - LLM_BACKEND=vllm
+      - LLM_BASE_URL=http://vllm:8000
+      - LLM_MODEL=meta-llama/Meta-Llama-3.1-70B-Instruct
+      - VIDEO_PIPELINE_ENABLED=true
+    depends_on: [vllm, redis, minio]
+  vllm:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    command: >
+      --model meta-llama/Meta-Llama-3.1-70B-Instruct
+      --tensor-parallel-size 2
+      --quantization awq
+      --max-model-len 8192
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 2, capabilities: [gpu]}]
+  redis:
+    image: redis:7-alpine
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports: ["9000:9000", "9001:9001"]

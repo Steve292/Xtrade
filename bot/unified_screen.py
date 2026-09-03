@@ -1,0 +1,188 @@
+"""
+Unified screening gate — smart money combined with the existing SMC/
+Fibonacci seven-gate screener, at explicit user request: "use the smart
+money system as a main gated system crossing into fibonacci and the smc
+signal all as a screening medium before a final summary on %, provided
+market structure is organized properly."
+
+Two layers, BOTH required — this adds a gate, it doesn't replace one:
+
+1. "Market structure organized properly" = the EXISTING seven-gate
+   TradeScreener result (bot/screening.py), unchanged: SMC confluence,
+   top-down alignment, liquidity sweep, risk/reward, sniper entry,
+   Supply/Demand, and Fibonacci OTE (run last, by that module's own design).
+
+2. Smart money (bot/smart_money.py's 9-module aggregate, including the
+   regulatory-news signal) must not ACTIVELY CONTRADICT the signal's side.
+   NEUTRAL doesn't block — in practice the aggregate reads NEUTRAL or
+   split most passes (see bot/smart_money.py's own documented asymmetry:
+   a bearish read can only ever draw on 4 of 9 modules), so requiring
+   strict same-direction agreement would block nearly everything, which
+   isn't what "screening medium" was asking for. An outright opposite call
+   (smart money BEARISH while the signal is LONG, or vice versa) does block.
+
+final_pct is a blend of the SMC signal's own confidence and how many of the
+9 smart-money modules actually agree with the signal's side — an honest
+"how many independent systems point the same way" summary, not just the
+seven-gate screener's confidence relabeled.
+
+Smart money here is the GLOBAL/market-wide read (bot/market_snapshot.py's
+BTC-centric aggregate, the same one the dashboard already shows), not
+recomputed per-symbol — CVD/GEX/stablecoin-flow/divergence are inherently
+market-wide concepts (see bot/smart_money.py), and recomputing a full
+per-symbol version for every coin on every pass would multiply this
+project's Yahoo/CoinGecko/Deribit calls far past what those free tiers
+tolerate. This is a deliberate scope decision, not an oversight.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from bot.screening import ScreenResult
+from bot.smc.strategy import Signal, SignalType
+
+_TOTAL_SMART_MONEY_MODULES = 9  # bot/smart_money.py's 8 + regulatory_news
+
+# How many of those 9 can actually vote each way. Derived by reading the
+# modules, not assumed:
+#
+#   BUY-capable  (6): cvd, divergence, liquidation_heatmap, smc_fib,
+#                     stablecoin_flow, regulatory_news
+#   SELL-capable (4): cvd, smc_fib, stablecoin_flow, regulatory_news
+#
+# gex, narrative_decay and session never emit a direction at all in this
+# implementation -- they are timing/caution gates that abstain as NEUTRAL.
+#
+# Dividing agreement by 9 therefore understates BOTH directions and understates
+# shorts far worse: a maximally-agreed short reaches 4/9 = 44%, capping its
+# final_pct at 72%, while a maximally-agreed long reaches 6/9 = 67% and caps at
+# 83%. One auto_fire threshold applied to both is not one standard -- at 75% it
+# is reachable for longs and arithmetically impossible for shorts, which makes
+# the bot silently long-only. See normalise_by_direction in evaluate_unified.
+MAX_BULLISH_MODULES = 6
+MAX_BEARISH_MODULES = 4
+
+
+@dataclass
+class UnifiedResult:
+    approved: bool
+    final_pct: float  # 0-100
+    structure_ok: bool
+    smart_money_ok: bool
+    smart_money_direction: str
+    smart_money_agreement_count: int
+    reason: str
+    # Knowledge confluence (bot/knowledge.py). Defaulted so every existing
+    # construction and every caller that never passes a knowledge result is
+    # unaffected. knowledge_pct is the raw corpus score; knowledge_adjust is
+    # what was actually applied to final_pct after clamping.
+    knowledge_pct: float = 0.0
+    knowledge_adjust: float = 0.0
+    knowledge_reason: str = ""
+
+
+DEFAULT_KNOWLEDGE_MAX_ADJUST_PCT = 5.0
+# final_pct midpoint the knowledge score is measured against: above it the
+# corpus agrees more than average and nudges up, below it, down.
+_KNOWLEDGE_NEUTRAL_PCT = 50.0
+
+
+def evaluate_unified(
+    signal: Signal,
+    screen_result: ScreenResult,
+    smart_money_direction: str,
+    smart_money_bullish_count: int,
+    smart_money_bearish_count: int,
+    knowledge_result=None,
+    knowledge_max_adjust_pct: float = DEFAULT_KNOWLEDGE_MAX_ADJUST_PCT,
+    normalise_by_direction: bool = False,
+) -> UnifiedResult:
+    """Adding `knowledge_result` (a bot.knowledge.KnowledgeResult) layers the
+    ingested corpus on as a THIRD, advisory-only input. Omitting it — which
+    every caller does until the config flag is on — reproduces this function's
+    previous output exactly.
+
+    Two properties this function must keep, both load-bearing:
+
+    1. `approved` NEVER depends on knowledge. It stays `structure_ok and
+       smart_money_ok`. The corpus is unvetted third-party commentary; it does
+       not get a vote on whether real money moves.
+
+    2. The knowledge contribution is a BOUNDED adjustment to final_pct, not a
+       third term in the average. A three-way mean would let the corpus swing
+       final_pct by up to ~33 points, and final_pct is exactly what
+       bot/runner.py compares against auto_fire_pct to decide whether a trade
+       fires with no human in the loop. Averaging it in would have handed an
+       unvetted transcript corpus a 33-point lever over unattended execution.
+       It gets `knowledge_max_adjust_pct` points, symmetric either way.
+    """
+    structure_ok = screen_result.approved
+
+    if signal.type == SignalType.LONG:
+        agreement_count = smart_money_bullish_count
+        smart_money_ok = smart_money_direction != "BEARISH"
+    elif signal.type == SignalType.SHORT:
+        agreement_count = smart_money_bearish_count
+        smart_money_ok = smart_money_direction != "BULLISH"
+    else:
+        agreement_count = 0
+        smart_money_ok = False
+
+    # Agreement as a share of what this DIRECTION can actually achieve, rather
+    # than of all 9 modules. Without it a short is scored against a ceiling it
+    # can never reach, so any single auto_fire threshold means something
+    # different for a long than for a short. Off by default: it changes
+    # final_pct, and that decides unattended firing.
+    if normalise_by_direction:
+        denominator = (
+            MAX_BULLISH_MODULES if signal.type == SignalType.LONG
+            else MAX_BEARISH_MODULES if signal.type == SignalType.SHORT
+            else _TOTAL_SMART_MONEY_MODULES
+        )
+    else:
+        denominator = _TOTAL_SMART_MONEY_MODULES
+    # Clamp: a module set richer than the derived maximum must not push
+    # agreement past 100%.
+    smart_money_agreement_pct = min(
+        100.0, (agreement_count / denominator) * 100 if denominator else 0.0
+    )
+    final_pct = (signal.confidence * 100 + smart_money_agreement_pct) / 2
+
+    # Advisory knowledge layer. `available=False` means "no opinion" (missing
+    # or unreadable corpus) and must apply NO adjustment — treating it as a
+    # 0% score would quietly penalise every setup the moment the corpus file
+    # went missing, which is a failure mode that would look exactly like the
+    # strategy getting worse.
+    knowledge_pct = 0.0
+    knowledge_adjust = 0.0
+    knowledge_reason = ""
+    if knowledge_result is not None and getattr(knowledge_result, "available", False):
+        knowledge_pct = float(knowledge_result.knowledge_pct)
+        knowledge_reason = knowledge_result.reason
+        cap = max(0.0, float(knowledge_max_adjust_pct))
+        raw = ((knowledge_pct - _KNOWLEDGE_NEUTRAL_PCT) / _KNOWLEDGE_NEUTRAL_PCT) * cap
+        knowledge_adjust = max(-cap, min(cap, raw))
+        final_pct = max(0.0, min(100.0, final_pct + knowledge_adjust))
+
+    approved = structure_ok and smart_money_ok
+
+    if not structure_ok:
+        reason = "market structure gates not cleared"
+    elif not smart_money_ok:
+        reason = f"smart money contradicts signal (reads {smart_money_direction})"
+    else:
+        reason = "structure and smart money aligned"
+
+    return UnifiedResult(
+        approved=approved,
+        final_pct=final_pct,
+        structure_ok=structure_ok,
+        smart_money_ok=smart_money_ok,
+        smart_money_direction=smart_money_direction,
+        smart_money_agreement_count=agreement_count,
+        reason=reason,
+        knowledge_pct=knowledge_pct,
+        knowledge_adjust=knowledge_adjust,
+        knowledge_reason=knowledge_reason,
+    )

@@ -1,4 +1,4 @@
-# SMC Trading Bot
+# TraderX
 
 Smart Money Concepts (SMC) trading bot with **backtesting**, **EVM wallet/DEX** support, and a native **macOS menu bar app**.
 
@@ -26,7 +26,7 @@ Then:
 source venv/bin/activate
 python main.py                  # Run live paper bot
 python backtest.py --bars 2000  # Backtest on historical data
-open macos/SMCBot.app           # Menu bar app
+open macos/TraderX.app           # Menu bar app
 ```
 
 ## Backtesting
@@ -69,22 +69,26 @@ Paper mode simulates swaps with a virtual wallet (1 ETH + $10,000 USDC).
 
 > **Warning:** Live EVM trading sends real transactions. Test in paper mode first. Never commit private keys.
 
-## macOS Menu Bar App
+## macOS Desktop App (TraderX.app)
 
-The app lives in your menu bar (top-right):
+Double-click **TraderX.app** — it starts the local dashboard server (if not
+already running) and opens the **TraderX Control Panel** in your default
+browser. The X icon shows in Finder and the browser tab.
 
-- **Start Bot** — launches paper trading loop
-- **Stop Bot** — terminates the bot
-- **Run Backtest** — runs 1500-bar backtest, shows results
-- **Scan Market** — one-shot SMC analysis on live data
-- **Open Project** — opens project folder in Finder
-
-Launch via:
 ```bash
-open macos/SMCBot.app
-# or
-python menubar.py
+open macos/TraderX.app            # or double-click it in Finder/Desktop
 ```
+
+The launcher forces native **arm64** for the venv's Python — macOS
+LaunchServices otherwise starts the universal binary under Rosetta (x86_64),
+where the arm64-only numpy/pandas wheels fail to load.
+
+> First launch on a locally-built app: macOS Gatekeeper may block a plain
+> double-click. Right-click → **Open** once to whitelist it, then double-click
+> works thereafter.
+
+A separate menu-bar agent (start/stop paper bot, backtest, scan) is still
+available via `python menubar.py` if you prefer a tray app.
 
 Works on **Apple Silicon (M1/M2/M3/M4)** and **Intel** Macs running macOS 12+.
 
@@ -114,7 +118,7 @@ smc-trading-bot/
 ├── scripts/
 │   └── install-macos.sh # macOS setup script
 ├── macos/
-│   └── SMCBot.app       # Native menu bar app (built by installer)
+│   └── TraderX.app       # Native menu bar app (built by installer)
 └── bot/
     ├── runner.py        # Main bot loop (CEX + EVM)
     ├── exchange.py      # CCXT + paper trading
