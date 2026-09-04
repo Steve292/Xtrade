@@ -119,6 +119,18 @@ def run_bot(config_path: str = "config.yaml") -> None:
         else:
             print("  Knowledge: ENABLED but no usable corpus found — "
                   "scoring will be skipped (no adjustment applied)")
+    # Real per-detector win rate (bot/trade_grades.py), blended into the
+    # knowledge score above its corpus-prevalence weight -- see
+    # score_signal()'s own docstring. Loaded once at startup, same lifecycle
+    # as knowledge_index above: this account's grade book doesn't change
+    # fast enough to justify a disk read on every scan pass, and a restart
+    # picks up newly-graded detectors the same way a restart picks up a
+    # freshly re-ingested corpus.
+    grade_weight_pct = float(knowledge_cfg.get("grade_weight_pct", 0.0) or 0.0)
+    grade_book = None
+    if grade_weight_pct > 0 and grades_path:
+        from bot.trade_grades import GradeBook
+        grade_book = GradeBook.load(grades_path)
 
     evm_dex: EVMDex | None = None
     # The MT5 client, kept at this scope so the main loop can ask the account
@@ -414,7 +426,10 @@ def run_bot(config_path: str = "config.yaml") -> None:
                     signal = strategy.analyze(df, htf_df)
                     screen_result = screener.screen(signal, df, htf_df) if signal.type != SignalType.NONE else None
                     knowledge_result = (
-                        knowledge_mod.score_signal(signal.detectors, knowledge_index)
+                        knowledge_mod.score_signal(
+                            signal.detectors, knowledge_index,
+                            grade_book=grade_book, grade_weight_pct=grade_weight_pct,
+                        )
                         if signal.type != SignalType.NONE and knowledge_index.available
                         else None
                     )

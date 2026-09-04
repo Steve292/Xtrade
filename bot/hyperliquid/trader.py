@@ -13,6 +13,7 @@ client.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from bot import live_state, pending_trades
@@ -33,6 +34,10 @@ class TradePlan:
     stop_loss: float
     take_profit: float
     risk_pct: float
+    # Detector modules that produced this setup, carried from Signal.detectors
+    # so the exit can attribute its outcome back to them (bot/trade_grades.py)
+    # -- MT5Position already does the same thing for the other venue.
+    detectors: tuple = ()
 
 
 def _parse_fill(resp) -> dict | None:
@@ -115,6 +120,9 @@ class HyperliquidTrader:
         knowledge_index=None,
         knowledge_max_adjust_pct: float = 5.0,
         normalise_smart_money_by_direction: bool = False,
+        grades_path=None,
+        grade_book=None,
+        grade_weight_pct: float = 0.0,
     ):
         self.client = client
         self.strategy = strategy
@@ -138,7 +146,22 @@ class HyperliquidTrader:
         self.knowledge_index = knowledge_index
         self.knowledge_max_adjust_pct = knowledge_max_adjust_pct
         self.normalise_smart_money_by_direction = normalise_smart_money_by_direction
-        self._tracked: dict[str, dict] = {}  # coin -> {side, entry, stop_loss, take_profit}
+        # Realised-outcome recording (bot/trade_grades.py), at parity with
+        # bot/mt5/broker.py's MT5Broker -- which is where grades_path being
+        # None-means-"record nothing" and injected-not-implicit both come
+        # from (see that class's docstring: a module-level default would let
+        # every test using this class in dry-run pollute the live grade
+        # store). grade_book/grade_weight_pct are the READ side (a loaded
+        # snapshot passed into score_signal for scoring), separate from
+        # grades_path's WRITE side (always freshly reloaded right before a
+        # write, in _grade_entry/_grade_exit) -- this venue previously had
+        # NEITHER: every closed Hyperliquid trade vanished ungraded, and
+        # MT5's grade book was the only one bot/knowledge.py could ever
+        # learn from.
+        self.grades_path = grades_path
+        self.grade_book = grade_book
+        self.grade_weight_pct = grade_weight_pct
+        self._tracked: dict[str, dict] = {}  # coin -> {side, entry, stop_loss, take_profit, detectors, opened_at}
 
     def guard_check(self, account_value: float, confidence: float | None = None) -> tuple[bool, str | None]:
         """Daily-loss / drawdown / concurrent-risk gate, checked right before an
@@ -229,6 +252,7 @@ class HyperliquidTrader:
             stop_loss=signal.stop_loss,
             take_profit=signal.take_profit,
             risk_pct=self.risk_pct,
+            detectors=tuple(signal.detectors or ()),
         )
 
     def evaluate(
@@ -261,7 +285,10 @@ class HyperliquidTrader:
         if (self.knowledge_index is not None and self.knowledge_index.available
                 and signal.type != SignalType.NONE):
             from bot import knowledge as knowledge_mod
-            knowledge_result = knowledge_mod.score_signal(signal.detectors, self.knowledge_index)
+            knowledge_result = knowledge_mod.score_signal(
+                signal.detectors, self.knowledge_index,
+                grade_book=self.grade_book, grade_weight_pct=self.grade_weight_pct,
+            )
         unified = evaluate_unified(
             signal, result, smart_money_direction, smart_money_bullish_count, smart_money_bearish_count,
             knowledge_result=knowledge_result,
@@ -308,22 +335,100 @@ class HyperliquidTrader:
             "initial_stop_loss": plan.stop_loss,  # immutable — the R-multiple basis for ratchet_stops()
             "stop_loss": plan.stop_loss, "take_profit": plan.take_profit,
             "milestones_locked": 0,
+            "detectors": plan.detectors,
+            "opened_at": time.time(),  # matches closed fills to THIS trade in _closed_pnl
         }
         oids = _parse_bracket_oids(bracket)
         if oids:
             self._tracked[plan.coin]["sl_oid"], self._tracked[plan.coin]["tp_oid"] = oids
+        self._grade_entry(plan.coin, plan.side, fill["price"], plan.stop_loss,
+                           plan.take_profit, plan.detectors)
         return resp
+
+    def _grade_id(self, coin: str, entry: float) -> str:
+        """Stable id for a grading record. Hyperliquid orders have no ticket
+        the way MT5 does -- same coin+entry fallback MT5Broker uses in its
+        own paper mode, where no ticket exists either."""
+        return f"{coin}:{entry}"
+
+    def _grade_entry(self, coin, side, entry, sl, tp, detectors) -> None:
+        """Open a grading record. Wrapped because a failure to RECORD a trade
+        must never affect the trade itself -- this is observation, mirroring
+        bot/mt5/broker.py's MT5Broker._grade_entry exactly."""
+        if self.grades_path is None:
+            return
+        try:
+            from bot.trade_grades import GradeBook
+            book = GradeBook.load(self.grades_path)
+            book.record_entry(self._grade_id(coin, entry), coin, side, detectors, entry, sl, tp)
+        except Exception as e:
+            print(f"[grades] entry not recorded ({type(e).__name__}) — trade unaffected")
+
+    def _grade_exit(self, trade_id: str, pnl: float) -> None:
+        if self.grades_path is None:
+            return
+        try:
+            from bot.trade_grades import GradeBook
+            book = GradeBook.load(self.grades_path)
+            book.record_exit(trade_id, pnl)
+        except Exception as e:
+            print(f"[grades] exit not recorded ({type(e).__name__}) — trade unaffected")
+
+    def _closed_pnl(self, coin: str, opened_at: float | None) -> float | None:
+        """Sum this position's realized P&L from recent fills (client.fills(),
+        each carrying `closedPnl`) since it was opened. None when it can't be
+        determined -- left ungraded rather than recorded as flat, which would
+        look like a real break-even outcome and skew the grade, same
+        reasoning as MT5Broker's own "no closing deal found" path."""
+        if opened_at is None:
+            return None
+        try:
+            fills = self.client.fills()
+        except Exception as e:
+            print(f"[grades] fills unavailable ({type(e).__name__}) — {coin} left ungraded")
+            return None
+        opened_at_ms = opened_at * 1000
+        total = 0.0
+        found = False
+        for f in fills:
+            if f.get("coin") != coin:
+                continue
+            if (f.get("time") or 0) < opened_at_ms:
+                continue
+            closed_pnl = f.get("closedPnl")
+            if closed_pnl in (None, ""):
+                continue
+            try:
+                total += float(closed_pnl)
+            except (TypeError, ValueError):
+                continue
+            found = True
+        return total if found else None
 
     def check_exits(self, open_positions: list) -> list[dict]:
         """Reconcile tracked positions against the venue's current open
         positions (passed in by the caller, already fetched this pass — no
         extra network call here). Any tracked coin no longer open has closed,
-        via its SL/TP bracket or a manual close, and is reported + dropped."""
+        via its SL/TP bracket or a manual close, and is reported + dropped.
+
+        A closed coin DOES cost one extra network call (client.fills(), in
+        _closed_pnl) to find its realized P&L -- unlike the open-positions
+        check above, that data isn't available from anything already fetched
+        this pass. Closes are rare relative to scan passes, so this stays
+        cheap in aggregate; same tradeoff MT5Broker's _check_exit_live makes
+        for realized_pnl_for_position."""
         open_coins = {p.coin for p in open_positions}
         closed = []
         for coin in list(self._tracked):
             if coin not in open_coins:
-                closed.append({"coin": coin, **self._tracked.pop(coin)})
+                record = self._tracked.pop(coin)
+                pnl = self._closed_pnl(coin, record.get("opened_at"))
+                if pnl is not None:
+                    self._grade_exit(self._grade_id(coin, record["entry"]), pnl)
+                else:
+                    print(f"[grades] no closing fill found for {coin} — "
+                          f"trade left ungraded rather than recorded as flat")
+                closed.append({"coin": coin, "pnl": pnl, **record})
         return closed
 
     def enforce_brackets(self, open_positions: list, account_value: float) -> list[dict]:

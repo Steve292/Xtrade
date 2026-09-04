@@ -213,6 +213,17 @@ knowledge:
   # authority. See bot/unified_screen.py's evaluate_unified docstring for the
   # two properties that don't change: no vote on approval, always bounded.
   max_adjust_pct: 7.5
+  # bot/trade_grades.py records every closed trade's outcome per detector but
+  # (deliberately, until now) never fed it back into scoring -- see that
+  # module's own docstring. 0.0 = pure corpus prevalence, as always. Above 0,
+  # a detector that has cleared MIN_SAMPLE=10 closed trades gets its corpus
+  # weight blended toward its REAL win rate on this account by this fraction;
+  # a detector with too few closed trades is unaffected either way -- there
+  # is no performance data yet to blend in. Starts at 0.0: trade_grades.json
+  # currently has zero closed trades recorded, so this would be a no-op if
+  # turned on today regardless of value. Raise it once real trade history
+  # exists to actually judge by.
+  grade_weight_pct: 0.0
 
 # --- Adaptive position sizing (bot/position_sizing.py)
 # Activates the regime / hotness / volatility / confidence multiplier chain,

@@ -167,6 +167,100 @@ def test_result_reports_which_detectors_were_corpus_backed(tmp_path):
     assert "1/2" in result.reason
 
 
+# --- grade_book / grade_weight_pct: real win rate blended into corpus weight
+
+
+class _FakeGrade:
+    def __init__(self, win_rate):
+        self.win_rate = win_rate
+
+
+class _FakeGradeBook:
+    """Stands in for bot.trade_grades.GradeBook — score_signal only ever
+    calls grade_for(module), so that's all this needs to provide."""
+
+    def __init__(self, grades: dict):
+        self._grades = grades
+
+    def grade_for(self, module):
+        return self._grades.get(module)
+
+
+def test_grade_weight_pct_zero_reproduces_prior_output_exactly(tmp_path):
+    """The default. A grade_book being present must change nothing unless
+    grade_weight_pct is actually raised above 0 -- this is the single most
+    important property here, same as every other flag in this codebase."""
+    index = _simple(tmp_path)
+    detectors = ("bot.smc.structure", "bot.smc.fvg")
+    baseline = score_signal(detectors, index)
+    book = _FakeGradeBook({"bot.smc.structure": _FakeGrade(0.0)})  # would tank it if applied
+    with_book_but_off = score_signal(detectors, index, grade_book=book, grade_weight_pct=0.0)
+    assert with_book_but_off.knowledge_pct == baseline.knowledge_pct
+    assert with_book_but_off.reason == baseline.reason
+
+
+def test_no_grade_book_reproduces_prior_output_exactly(tmp_path):
+    """grade_weight_pct alone, with no book to consult, must also be a no-op
+    -- there's no performance data to blend in without a book."""
+    index = _simple(tmp_path)
+    detectors = ("bot.smc.structure",)
+    baseline = score_signal(detectors, index)
+    result = score_signal(detectors, index, grade_book=None, grade_weight_pct=1.0)
+    assert result.knowledge_pct == baseline.knowledge_pct
+
+
+def test_an_ungraded_detector_keeps_its_corpus_weight(tmp_path):
+    """grade_for() returning None (below MIN_SAMPLE) must leave that
+    detector's weight untouched -- "not enough data yet" is not "0% win
+    rate", the same invariant trade_grades.py's own MIN_SAMPLE gate protects."""
+    index = _simple(tmp_path)
+    detectors = ("bot.smc.structure",)
+    baseline = score_signal(detectors, index)
+    book = _FakeGradeBook({})  # nothing graded
+    result = score_signal(detectors, index, grade_book=book, grade_weight_pct=1.0)
+    assert result.knowledge_pct == baseline.knowledge_pct
+    assert "performance-weighted" not in result.reason
+
+
+def test_a_high_win_rate_detector_scores_higher_than_pure_corpus(tmp_path):
+    index = _simple(tmp_path)
+    detectors = ("bot.smc.order_blocks",)  # a LOW corpus-weight module
+    baseline = score_signal(detectors, index).knowledge_pct
+    book = _FakeGradeBook({"bot.smc.order_blocks": _FakeGrade(1.0)})  # 100% real win rate
+    boosted = score_signal(detectors, index, grade_book=book, grade_weight_pct=1.0).knowledge_pct
+    assert boosted > baseline
+    assert boosted <= 100.0
+
+
+def test_a_low_win_rate_detector_scores_lower_than_pure_corpus(tmp_path):
+    index = _simple(tmp_path)
+    detectors = ("bot.smc.structure",)  # the HIGHEST corpus-weight module
+    baseline = score_signal(detectors, index).knowledge_pct
+    book = _FakeGradeBook({"bot.smc.structure": _FakeGrade(0.0)})  # 0% real win rate
+    dampened = score_signal(detectors, index, grade_book=book, grade_weight_pct=1.0).knowledge_pct
+    assert dampened < baseline
+    assert dampened >= 0.0
+
+
+def test_grade_weight_pct_is_clamped_to_zero_one(tmp_path):
+    """A misconfigured value above 1 or below 0 must not blow past a pure
+    performance read in either direction."""
+    index = _simple(tmp_path)
+    detectors = ("bot.smc.structure",)
+    book = _FakeGradeBook({"bot.smc.structure": _FakeGrade(1.0)})
+    at_one = score_signal(detectors, index, grade_book=book, grade_weight_pct=1.0).knowledge_pct
+    above_one = score_signal(detectors, index, grade_book=book, grade_weight_pct=5.0).knowledge_pct
+    assert above_one == at_one
+
+
+def test_reason_names_how_many_detectors_were_performance_weighted(tmp_path):
+    index = _simple(tmp_path)
+    detectors = ("bot.smc.structure", "bot.smc.fvg")
+    book = _FakeGradeBook({"bot.smc.structure": _FakeGrade(0.8)})  # only one graded
+    result = score_signal(detectors, index, grade_book=book, grade_weight_pct=0.5)
+    assert "1 performance-weighted" in result.reason
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))

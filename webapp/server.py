@@ -194,6 +194,8 @@ def _trader(client: HyperliquidClient) -> HyperliquidTrader:
         knowledge_max_adjust_pct=CFG.get("knowledge", {}).get("max_adjust_pct", 5.0),
         normalise_smart_money_by_direction=CFG.get(
             "normalise_smart_money_by_direction", False),
+        grade_book=_grade_book(),
+        grade_weight_pct=CFG.get("knowledge", {}).get("grade_weight_pct", 0.0),
     )
 
 
@@ -212,6 +214,27 @@ def _knowledge_index():
         kcfg.get("corpus_path", knowledge_mod.DEFAULT_CORPUS_PATH),
         kcfg.get("cache_path", knowledge_mod.DEFAULT_CACHE_PATH),
     )
+
+
+def _grade_book():
+    """Same per-request-not-cached reasoning as _knowledge_index() just
+    above: trade_grades.json is small (closed-trade records, not the ~1000-
+    document corpus), so reloading it fresh on every call is cheap and never
+    serves stale grades to a long-running dashboard process. None when
+    grade_weight_pct is 0 or grading is off -- score_signal() treats a None
+    grade_book as "no performance data", identical to its behaviour before
+    this existed."""
+    kcfg = CFG.get("knowledge", {})
+    if not (float(kcfg.get("grade_weight_pct", 0.0) or 0.0) > 0):
+        return None
+    grades_path = (
+        CFG.get("trade_grades_path", "trade_grades.json")
+        if CFG.get("trade_grades", True) else None
+    )
+    if not grades_path:
+        return None
+    from bot.trade_grades import GradeBook
+    return GradeBook.load(grades_path)
 
 
 def _mt5_client() -> MT5Client:
@@ -717,6 +740,8 @@ def _scan_mt5_rows() -> list[dict]:
     symbols = CFG.get("mt5_watchlist") or [CFG.get("mt5_symbol", "EURUSDc")]
     sm_direction, sm_bullish, sm_bearish = _get_smart_money()
     mt5_knowledge_index = _knowledge_index()
+    mt5_grade_book = _grade_book()
+    mt5_grade_weight_pct = CFG.get("knowledge", {}).get("grade_weight_pct", 0.0)
 
     out = []
     for symbol in symbols:
@@ -731,7 +756,10 @@ def _scan_mt5_rows() -> list[dict]:
                 continue
             result = screener.screen(signal, df, htf_df)
             kr = (
-                knowledge_mod.score_signal(signal.detectors, mt5_knowledge_index)
+                knowledge_mod.score_signal(
+                    signal.detectors, mt5_knowledge_index,
+                    grade_book=mt5_grade_book, grade_weight_pct=mt5_grade_weight_pct,
+                )
                 if mt5_knowledge_index.available else None
             )
             unified = evaluate_unified(

@@ -290,6 +290,69 @@ def main() -> None:
     print("\nAUTO = setups that would fire with NO human review. That column is "
           "the one to read before enabling anything.")
 
+    # extended_detectors / htf_neutral_credit are NOT covered by the arms
+    # table above: those flags affect SIGNAL GENERATION itself (inside
+    # collect_candidates -- SMCStrategy._apply_extended's confidence
+    # adjustment, and the HTF-neutral scoring credit), not just downstream
+    # screening layered onto one fixed candidate set. Comparing them
+    # honestly needs its own, separately-collected candidate set per value --
+    # scoring one set under two "arms" the way the table above does would
+    # silently compare the wrong signals, the exact bug this harness's own
+    # collect_candidates() docstring already documents fixing once (the
+    # htf_sweep "either" reporting FEWER auto-fires than "both" tell).
+    smc_cfg = config.get("smc", {})
+    live_extended = live_flags["extended"]
+    live_htf_credit = float(smc_cfg.get("htf_neutral_credit", 0.0) or 0.0)
+    if live_extended or live_htf_credit > 0:
+        print(f"\nextended_detectors / htf_neutral_credit -- own candidate set per "
+              f"variant, since these change signal generation itself. Full 2x2, "
+              f"not just live-vs-off: an early run bundling both flags into one "
+              f"OFF variant found the candidate SIGNAL COUNT itself changed (not "
+              f"just confidence on the same signals), and couldn't say which flag "
+              f"caused it. This isolates each independently:")
+        hdr2 = f"{'variant':<38} {'sig':>5} {'appr':>5} {'AUTO':>5} {'queue':>6} {'avg%':>7}"
+        print(hdr2); print("-" * len(hdr2))
+        variants = [
+            ("extended OFF, htf_credit OFF", False, 0.0),
+            ("extended ON,  htf_credit OFF", True, 0.0),
+            ("extended OFF, htf_credit ON", False, live_htf_credit if live_htf_credit > 0 else 0.10),
+            ("extended ON,  htf_credit ON (live config)", True,
+             live_htf_credit if live_htf_credit > 0 else 0.10),
+        ]
+        base2 = None
+        for name, ext, htf_credit in variants:
+            cfg_variant = dict(config)
+            cfg_variant["smc"] = dict(smc_cfg, htf_neutral_credit=htf_credit)
+            cset = collect_candidates(df, cfg_variant, extended=ext, step=args.step)
+            s = run_arm(cset, config, index=index, balance=args.balance,
+                        staged_usd=args.staged_usd, sm=sm, screen_overrides={},
+                        knowledge_on=live_flags["knowledge_on"], sizing_on=live_flags["sizing_on"])
+            n = max(s["approved"], 1)
+            row = (f"{name:<38} {s['signals']:>5} {s['approved']:>5} {s['auto_fire']:>5} "
+                   f"{s['queued']:>6} {s['final_pct_sum']/n:>7.2f}")
+            if base2 is None:
+                base2 = s
+            else:
+                d_appr, d_fire = s["approved"] - base2["approved"], s["auto_fire"] - base2["auto_fire"]
+                marks = []
+                if d_appr: marks.append(f"approved {d_appr:+d}")
+                if d_fire: marks.append(f"auto-fire {d_fire:+d}")
+                if marks: row += "   " + ", ".join(marks)
+            print(row)
+    else:
+        print("\n(extended_detectors and htf_neutral_credit are both off in this "
+              "config -- nothing to compare them against.)")
+
+    print(
+        "\nNote on what this script CANNOT tell you: it replays HISTORY, once, "
+        "through a fixed decision chain. It cannot show what a flag does to "
+        "behavior that unfolds forward in real time (e.g. a threshold that "
+        "changes which setups get approved changes which candles the NEXT "
+        "candidate is drawn from, live). That needs actual walk-forward -- "
+        "running each variant as its own paper-trading process, forward, for "
+        "real calendar time, not something a replay can substitute for."
+    )
+
 
 if __name__ == "__main__":
     main()

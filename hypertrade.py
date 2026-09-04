@@ -164,6 +164,23 @@ def main() -> None:
         if knowledge_index.available:
             print(f"  Knowledge: {len(knowledge_index.weights)} modules weighted "
                   f"from {knowledge_index.document_count} documents")
+    # Realised-outcome store (bot/trade_grades.py) -- same flag and default
+    # path bot/runner.py's MT5 loop uses. Previously absent from this venue
+    # entirely: every closed Hyperliquid trade vanished ungraded, so
+    # bot/knowledge.py's grade_weight_pct (below) could only ever learn from
+    # MT5's half of the account.
+    grades_path = (
+        cfg.get("trade_grades_path", "trade_grades.json")
+        if cfg.get("trade_grades", True) else None
+    )
+    # Real per-detector win rate blended into knowledge scoring -- see
+    # bot/knowledge.py's score_signal docstring. Loaded once at startup, same
+    # lifecycle as knowledge_index just above.
+    grade_weight_pct = float(knowledge_cfg.get("grade_weight_pct", 0.0) or 0.0)
+    grade_book = None
+    if grade_weight_pct > 0 and grades_path:
+        from bot.trade_grades import GradeBook
+        grade_book = GradeBook.load(grades_path)
     # Staged fixed-dollar risk (config.yaml's fixed_risk_usd) overrides
     # trader.risk_pct below when enabled — same mechanism bot/runner.py
     # uses for MT5, recomputed every pass from the live combined balance.
@@ -208,7 +225,9 @@ def main() -> None:
                                 knowledge_index=knowledge_index,
                                 knowledge_max_adjust_pct=knowledge_cfg.get("max_adjust_pct", 5.0),
                                 normalise_smart_money_by_direction=cfg.get(
-                                    "normalise_smart_money_by_direction", False))
+                                    "normalise_smart_money_by_direction", False),
+                                grades_path=grades_path, grade_book=grade_book,
+                                grade_weight_pct=grade_weight_pct)
 
     watch = None
     if args.watchlist:
@@ -259,8 +278,9 @@ def main() -> None:
                         acct.account_value, acct.withdrawable, acct.positions
                     )
                     for c in trader.check_exits(open_positions):
+                        pnl_txt = f", PnL ${c['pnl']:+.2f}" if c.get("pnl") is not None else ", PnL unknown (ungraded)"
                         print(f"[{c['coin']}] position closed — was {c['side'].upper()} "
-                              f"entry {c['entry']:.4g}, SL {c['stop_loss']:.4g} / TP {c['take_profit']:.4g}")
+                              f"entry {c['entry']:.4g}, SL {c['stop_loss']:.4g} / TP {c['take_profit']:.4g}{pnl_txt}")
                     trader.enforce_brackets(open_positions, account_value)
                     trader.ratchet_stops(open_positions)
                     if not armed:

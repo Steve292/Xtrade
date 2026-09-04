@@ -181,7 +181,12 @@ def build_index(
     return index
 
 
-def score_signal(detectors, index: KnowledgeIndex) -> KnowledgeResult:
+def score_signal(
+    detectors,
+    index: KnowledgeIndex,
+    grade_book=None,
+    grade_weight_pct: float = 0.0,
+) -> KnowledgeResult:
     """Corpus-weighted score for the detectors that produced a setup.
 
     Combined as a damped noisy-OR: ``1 - product(1 - weight * DAMPING)``.
@@ -204,6 +209,20 @@ def score_signal(detectors, index: KnowledgeIndex) -> KnowledgeResult:
     detector from saturating the result — without it the top-weighted module
     (weight 1.0 by construction, since weights are normalised against the
     peak) would pin every setup containing it to exactly 100%.
+
+    `grade_book`/`grade_weight_pct` are the corpus's own docstring's
+    deferred promise ("bot/knowledge.py may consult these grades once they
+    exist") — bot/trade_grades.py's REAL, this-account win rate per
+    detector, once it clears MIN_SAMPLE closed trades. Corpus prevalence
+    measures what practitioners talk about; it says nothing about whether
+    trading a concept makes money on this account. `grade_weight_pct` in
+    [0, 1] blends a graded detector's corpus weight toward its real win rate
+    (0 = pure corpus, as before; 1 = pure performance once graded). An
+    UNGRADED detector (< MIN_SAMPLE trades, or grade_book=None) always keeps
+    its plain corpus weight — there is no performance data to blend in, and
+    treating "not enough data yet" as "0% win rate" would be exactly the
+    kind of unearned confidence trade_grades.py's MIN_SAMPLE gate exists to
+    prevent. Default 0.0 reproduces this function's prior output exactly.
     """
     if not index.available:
         return _empty_result("no knowledge corpus")
@@ -216,15 +235,26 @@ def score_signal(detectors, index: KnowledgeIndex) -> KnowledgeResult:
             0.0, "no corpus coverage for these detectors", (), available=True
         )
 
+    blend = max(0.0, min(1.0, grade_weight_pct))
+    graded = []
     residual = 1.0
     for d in matched:
-        residual *= 1.0 - index.weight_for(d) * _DAMPING
+        weight = index.weight_for(d)
+        if blend > 0 and grade_book is not None:
+            grade = grade_book.grade_for(d)
+            if grade is not None and grade.win_rate is not None:
+                weight = weight * (1 - blend) + grade.win_rate * blend
+                graded.append(d)
+        residual *= 1.0 - weight * _DAMPING
     pct = max(0.0, min(100.0, (1.0 - residual) * 100.0))
     top = sorted(matched, key=index.weight_for, reverse=True)[:3]
     short = ", ".join(m.rsplit(".", 1)[-1] for m in top)
+    reason = f"{len(matched)}/{len(detectors)} detectors corpus-backed ({short})"
+    if graded:
+        reason += f"; {len(graded)} performance-weighted from real trades"
     return KnowledgeResult(
         knowledge_pct=pct,
-        reason=f"{len(matched)}/{len(detectors)} detectors corpus-backed ({short})",
+        reason=reason,
         matched=matched,
         available=True,
     )
