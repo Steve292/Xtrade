@@ -108,6 +108,7 @@ class SMCStrategy:
         extended_detectors: bool = False,
         extended_max_adjust: float = 0.10,
         htf_neutral_credit: float = 0.0,
+        min_confidence: float = 0.55,
     ):
         self.swing_lookback = swing_lookback
         self.order_block_lookback = order_block_lookback
@@ -129,7 +130,7 @@ class SMCStrategy:
         # They refine confidence AFTER the confluence gate below has already
         # decided there is a setup — they are deliberately NOT extra points in
         # _check_long/_check_short's score. Adding to that score would let a
-        # new detector push a sub-threshold setup over the 0.55 entry bar and
+        # new detector push a sub-threshold setup over the min_confidence entry bar and
         # manufacture trades that never existed. Refining afterwards can only
         # sharpen or dampen a setup that already qualified.
         #
@@ -157,6 +158,19 @@ class SMCStrategy:
         # HTF (it only rejects a DIRECTLY OPPOSING one), so there was no
         # existing restriction on neutral to relax here.
         self.htf_neutral_credit = max(0.0, min(0.2499, htf_neutral_credit))
+        # The confluence-score floor below (formerly hardcoded 0.55 twice, in
+        # _check_long and _check_short) that decides whether a Signal is
+        # emitted AT ALL, not the separate config.yaml screening.min_confidence
+        # that TradeScreener's "SMC confluence" gate checks downstream on
+        # whatever signal.confidence comes out of here. Those two used to be
+        # two independently-maintained numbers that happened to both read
+        # 0.55 -- lowering screening.min_confidence in config, expecting
+        # weaker setups to reach the screen for inspection, silently did
+        # nothing below 0.55: this gate had already refused to generate a
+        # signal at all. Default preserves the prior hardcoded behaviour
+        # exactly; live callers now pass config's actual value so tuning it
+        # in one place tunes both gates.
+        self.min_confidence = min_confidence
 
     def analyze(self, df: pd.DataFrame, htf_df: pd.DataFrame | None = None) -> Signal:
         if len(df) < 50:
@@ -334,7 +348,7 @@ class SMCStrategy:
                     reasons.append("Bullish FVG")
                     break
 
-        if score < 0.55 or entry_zone is None:
+        if score < self.min_confidence or entry_zone is None:
             return self._no_signal("Long confluence insufficient")
 
         if self.stop_loss_pct is not None:
@@ -405,7 +419,7 @@ class SMCStrategy:
                     reasons.append("Bearish FVG")
                     break
 
-        if score < 0.55 or entry_zone is None:
+        if score < self.min_confidence or entry_zone is None:
             return self._no_signal("Short confluence insufficient")
 
         if self.stop_loss_pct is not None:

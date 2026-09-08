@@ -67,6 +67,7 @@ def main() -> None:
         extended_detectors=config.get("smc", {}).get("extended_detectors", False),
         extended_max_adjust=config.get("smc", {}).get("extended_max_adjust", 0.10),
         htf_neutral_credit=config.get("smc", {}).get("htf_neutral_credit", 0.0),
+        min_confidence=config.get("screening", {}).get("min_confidence", 0.55),
     )
 
     if args.csv:

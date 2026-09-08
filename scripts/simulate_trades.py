@@ -165,7 +165,8 @@ def main():
         reward_risk_ratio=cfg["reward_risk_ratio"], stop_loss_pct=cfg.get("stop_loss_pct"),
         extended_detectors=smc_cfg.get("extended_detectors", False),
         extended_max_adjust=smc_cfg.get("extended_max_adjust", 0.10),
-        htf_neutral_credit=smc_cfg.get("htf_neutral_credit", 0.0))
+        htf_neutral_credit=smc_cfg.get("htf_neutral_credit", 0.0),
+        min_confidence=cfg.get("screening", {}).get("min_confidence", 0.55))
     screener = TradeScreener(ScreenConfig.from_dict(cfg.get("screening", {})))
 
     c = MT5Client.connect(host=os.getenv("MT5_HOST","127.0.0.1"), port=os.getenv("MT5_PORT","18812"),

@@ -290,3 +290,97 @@ def test_credit_only_applies_when_htf_actually_reads_neutral():
         if off.type == on.type:
             assert abs(on.confidence - off.confidence) < 1e-9, \
                 "credit leaked into a bar with a CONFIRMED (non-neutral) HTF trend"
+
+
+# --- min_confidence: the confluence-score floor that decides whether a ------
+# Signal is emitted at all (SignalType.NONE vs LONG/SHORT). Used to be
+# hardcoded 0.55 in _check_long/_check_short, independent of config.yaml's
+# screening.min_confidence -- which TradeScreener's "SMC confluence" gate
+# checks AGAIN, downstream, on whatever confidence this floor let through.
+# Those two numbers happened to match (both 0.55) but nothing enforced it:
+# lowering screening.min_confidence in config, expecting weaker setups to
+# reach the screen for inspection, silently did nothing below 0.55 -- this
+# floor had already refused to generate a signal. Now one config value
+# drives both.
+
+
+def test_min_confidence_defaults_to_the_prior_hardcoded_value():
+    assert SMCStrategy().min_confidence == 0.55
+
+
+def test_default_min_confidence_is_bit_identical_to_the_original_behaviour():
+    """Flag-off parity, same shape as the htf_neutral_credit equivalent
+    above: the new parameter existing at all must not change anything when
+    left at its default."""
+    for seed in range(60):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        off = SMCStrategy().analyze(df, htf)
+        explicit = SMCStrategy(min_confidence=0.55).analyze(df, htf)
+        assert off.confidence == explicit.confidence
+        assert off.type == explicit.type
+
+
+def test_a_fully_confluent_setup_clears_a_high_min_confidence():
+    """LONG_ARGS/SHORT_ARGS above are hand-built to score ~1.0 (every
+    confluence factor present) -- raising the floor short of that must still
+    let it through."""
+    strategy = SMCStrategy(min_confidence=0.9)
+    assert strategy._check_long(**LONG_ARGS).type == SignalType.LONG
+    assert strategy._check_short(**SHORT_ARGS).type == SignalType.SHORT
+
+
+def test_min_confidence_above_the_max_possible_score_blocks_every_signal():
+    """The gate (`score < self.min_confidence`) compares the RAW, unclamped
+    score -- not signal.confidence, which is separately clamped to 1.0 only
+    on the Signal that's actually returned. LONG_ARGS/SHORT_ARGS stack every
+    confluence bonus at once (HTF + LTF + BOS + sweep + zone + entry_zone),
+    which sums past 1.0 (1.20 here) -- so 1.01 does NOT block them, as an
+    earlier version of this test wrongly assumed. 5.0 is comfortably above
+    anything any realistic combination of bonuses could sum to."""
+    strategy = SMCStrategy(min_confidence=5.0)
+    assert strategy._check_long(**LONG_ARGS).type == SignalType.NONE
+    assert strategy._check_short(**SHORT_ARGS).type == SignalType.NONE
+
+
+def test_lowering_min_confidence_never_turns_a_signal_into_no_signal():
+    """A lower floor is strictly more permissive in the one sense that's
+    actually guaranteed: a bar that already qualified (long OR short) can
+    never regress to NO signal at a lower floor. It does NOT guarantee the
+    SAME type -- see the direction-flip test right below for why not."""
+    for seed in range(60):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        strict = SMCStrategy(min_confidence=0.55).analyze(df, htf)
+        loose = SMCStrategy(min_confidence=0.20).analyze(df, htf)
+        if strict.type is not SignalType.NONE:
+            assert loose.type is not SignalType.NONE, (
+                "a LOWER confluence floor turned an already-qualifying setup "
+                "into NO signal -- a more permissive floor must never be "
+                "more restrictive than a stricter one"
+            )
+
+
+def test_lowering_min_confidence_can_flip_long_to_short_by_priority_order():
+    """Real, structural, worth having a named test for: analyze() checks
+    LONG first and only evaluates SHORT if long_signal.type is NONE (see
+    analyze()'s own body). On a bar where long scores just under the floor
+    and short scores over it, raising min_confidence's floor does not just
+    admit 'more, weaker' setups symmetrically -- lowering it can let LONG
+    clear the bar first and pre-empt a SHORT that would otherwise have won.
+    This is NOT a bug introduced by making min_confidence configurable; the
+    priority order predates it. It was simply unobservable before, when
+    0.55 was the only value that ever existed to compare against. Recorded
+    here so a future change to analyze()'s dispatch order has to consciously
+    break this test rather than silently changing live trading behaviour."""
+    flipped = 0
+    for seed in range(300):
+        df, htf = _walk(seed), _walk(seed + 9000, 120)
+        strict = SMCStrategy(min_confidence=0.55).analyze(df, htf)
+        loose = SMCStrategy(min_confidence=0.20).analyze(df, htf)
+        if (strict.type is SignalType.SHORT and loose.type is SignalType.LONG):
+            flipped += 1
+    assert flipped > 0, (
+        "expected at least one seed in this sample to demonstrate the "
+        "long-pre-empts-short priority flip -- if this now fails, either "
+        "analyze()'s dispatch order changed (intentionally or not) or the "
+        "sample is too small; widen the seed range before assuming it's fixed"
+    )

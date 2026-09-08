@@ -150,6 +150,7 @@ def _trader(client: HyperliquidClient) -> HyperliquidTrader:
         extended_detectors=CFG.get("smc", {}).get("extended_detectors", False),
         extended_max_adjust=CFG.get("smc", {}).get("extended_max_adjust", 0.10),
         htf_neutral_credit=CFG.get("smc", {}).get("htf_neutral_credit", 0.0),
+        min_confidence=CFG.get("screening", {}).get("min_confidence", 0.55),
     )
     screener = TradeScreener(ScreenConfig.from_dict(CFG.get("screening", {})))
     guard_cfg = CFG.get("capital_guard", {})
@@ -733,6 +734,7 @@ def _scan_mt5_rows() -> list[dict]:
         extended_detectors=CFG.get("smc", {}).get("extended_detectors", False),
         extended_max_adjust=CFG.get("smc", {}).get("extended_max_adjust", 0.10),
         htf_neutral_credit=CFG.get("smc", {}).get("htf_neutral_credit", 0.0),
+        min_confidence=CFG.get("screening", {}).get("min_confidence", 0.55),
     )
     screener = TradeScreener(ScreenConfig.from_dict(CFG.get("screening", {})))
     ltf = CFG.get("mt5_timeframe", CFG.get("timeframe", "15m"))

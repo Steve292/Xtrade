@@ -233,6 +233,11 @@ def compute_snapshot(cfg: dict | None = None) -> dict:
                 extended_detectors=cfg.get("smc", {}).get("extended_detectors", False),
                 extended_max_adjust=cfg.get("smc", {}).get("extended_max_adjust", 0.10),
                 htf_neutral_credit=cfg.get("smc", {}).get("htf_neutral_credit", 0.0),
+                # min_confidence matched too, same reasoning as above -- it's
+                # the OTHER thing that decides signal.type at the margin, not
+                # just confidence (see bot/smc/strategy.py's own comment on
+                # why this used to be hardcoded independently of config).
+                min_confidence=cfg.get("screening", {}).get("min_confidence", 0.55),
             )
             smc_signal_type = strategy.analyze(btc_candles, htf_candles).type.value
         except Exception as e:
@@ -372,6 +377,7 @@ def compute_snapshot(cfg: dict | None = None) -> dict:
             extended_detectors=cfg.get("smc", {}).get("extended_detectors", False),
             extended_max_adjust=cfg.get("smc", {}).get("extended_max_adjust", 0.10),
             htf_neutral_credit=cfg.get("smc", {}).get("htf_neutral_credit", 0.0),
+            min_confidence=cfg.get("screening", {}).get("min_confidence", 0.55),
         )
         for symbol in cfg.get("mt5_watchlist") or []:
             try:
