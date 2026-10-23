@@ -452,7 +452,19 @@ def run_bot(config_path: str = "config.yaml") -> None:
                     sym_strategy = symbol_strategies.get(sym, strategy)
                     sym_screener = symbol_screeners.get(sym, screener)
                     signal = sym_strategy.analyze(df, htf_df)
-                    screen_result = sym_screener.screen(signal, df, htf_df) if signal.type != SignalType.NONE else None
+                    # Daily frame for the patience gate, fetched only when that
+                    # symbol's screener uses it and only once there is a signal
+                    # to judge. A failed fetch leaves it None and the gate
+                    # waits (blocks) instead of trading blind.
+                    daily_df = None
+                    if signal.type != SignalType.NONE and sym_screener.cfg.patience_enabled:
+                        try:
+                            daily_df = data.fetch_ohlcv(sym, "1d", limit=sym_screener.cfg.patience_lookback + 2)
+                        except Exception as e:
+                            print(f"[{sym}] patience: daily candles unavailable "
+                                  f"({type(e).__name__}) -- waiting this pass")
+                    screen_result = (sym_screener.screen(signal, df, htf_df, context_df=daily_df)
+                                     if signal.type != SignalType.NONE else None)
                     knowledge_result = (
                         knowledge_mod.score_signal(
                             signal.detectors, knowledge_index,

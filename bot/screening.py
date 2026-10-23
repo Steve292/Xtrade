@@ -109,6 +109,19 @@ class ScreenConfig:
     # breakout) -- location alone separated all nine.
     max_range_position: float = 1.0
     range_lookback_bars: int = 288  # 24h of 5m bars; capped to the data given
+    # Patience gate, at explicit user request ("be patient, don't trade the
+    # chop"). Sits out the middle of the last `patience_lookback` COMPLETED
+    # daily candles' range: longs only within `patience_extreme` of the range
+    # low, shorts only within it of the range high. Needs a daily frame passed
+    # to screen() as context_df; with the gate on and no daily data it WAITS
+    # (blocks) rather than trading blind. Off by default.
+    # Measured 2026-10-23 on 433 real MT5 BTCUSDc signals (7 months, live
+    # spread): the trades it blocks lost -57.2R; the 98 it keeps made +7.2R
+    # (38% win) vs -50.0R ungated. A loss filter ~breakeven, not a proven
+    # edge. The "wait for a breakout close" variant tested negative.
+    patience_enabled: bool = False
+    patience_lookback: int = 30
+    patience_extreme: float = 0.25
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
@@ -119,7 +132,8 @@ class TradeScreener:
     def __init__(self, config: ScreenConfig | None = None):
         self.cfg = config or ScreenConfig()
 
-    def screen(self, signal: Signal, df: pd.DataFrame, htf_df: pd.DataFrame) -> ScreenResult:
+    def screen(self, signal: Signal, df: pd.DataFrame, htf_df: pd.DataFrame,
+               context_df: pd.DataFrame | None = None) -> ScreenResult:
         cfg = self.cfg
         if signal.type == SignalType.NONE:
             return ScreenResult(False, "none", [Check("SMC confluence", False, "no signal")])
@@ -211,6 +225,22 @@ class TradeScreener:
                 f"{pos:.0%} {side_word} over {len(window)} bars "
                 f"(max {cfg.max_range_position:.0%})",
             ))
+
+        # 3d. Patience -- sit out the middle of the multi-day range. Uses only
+        #     COMPLETED daily candles: the last row of a live daily fetch is
+        #     today's still-forming bar, so it is excluded.
+        if cfg.patience_enabled:
+            ok, detail = False, "no daily data -- waiting"
+            if context_df is not None and len(context_df) >= 3:
+                box = context_df.iloc[-(cfg.patience_lookback + 1):-1]
+                p_lo, p_hi = float(box["low"].min()), float(box["high"].max())
+                p_pos = (signal.entry - p_lo) / (p_hi - p_lo) if p_hi > p_lo else 0.5
+                edge = p_pos if direction == "long" else 1.0 - p_pos
+                ok = edge <= cfg.patience_extreme
+                side_word = "low" if direction == "long" else "high"
+                detail = (f"{edge:.0%} from the {len(box)}-day range {side_word} "
+                          f"({p_lo:.5g}-{p_hi:.5g}); trades only within {cfg.patience_extreme:.0%}")
+            checks.append(Check("Patience", ok, detail))
 
         # 4. Risk management — reward:risk and a valid stop
         risk = abs(signal.entry - signal.stop_loss)

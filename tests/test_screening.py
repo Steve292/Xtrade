@@ -731,6 +731,56 @@ def test_short_location_is_mirrored_from_the_top():
     assert not _range_check(short(101.0), df).passed   # selling the bottom
 
 
+# ---- patience gate ---------------------------------------------------------
+
+def _daily(lo=100.0, hi=110.0, n=32, today=(105.0, 106.0)):
+    """n completed daily candles spanning lo..hi, then one still-forming bar
+    (`today`) that must be IGNORED by the gate."""
+    rows = [{"timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(days=i), "open": (lo + hi) / 2,
+             "high": hi if i == 3 else (lo + hi) / 2 + 0.5, "low": lo if i == 7 else (lo + hi) / 2 - 0.5,
+             "close": (lo + hi) / 2, "volume": 1} for i in range(n)]
+    rows.append({"timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(days=n), "open": today[0],
+                 "high": today[1], "low": today[0], "close": today[1], "volume": 1})
+    return pd.DataFrame(rows)
+
+
+def _patience(sig, daily, **kw):
+    from dataclasses import replace
+    r = TradeScreener(replace(CFG, patience_enabled=True, **kw)).screen(sig, LTF, BULL_HTF, context_df=daily)
+    return next(c for c in r.checks if c.name == "Patience")
+
+
+def test_patience_off_by_default_adds_no_check():
+    r = TradeScreener(CFG).screen(_long_signal(_pocket_mid()), LTF, BULL_HTF)
+    assert not any(c.name == "Patience" for c in r.checks)
+
+
+def test_patience_allows_long_near_range_low_and_blocks_mid_range():
+    d = _daily()  # 30-day range 100-110
+    assert _patience(_long_signal(101.0), d).passed        # 10% from the low
+    assert not _patience(_long_signal(105.0), d).passed    # mid-range chop -> wait
+
+
+def test_patience_short_is_measured_from_the_high():
+    d = _daily()
+    short = lambda e: Signal(SignalType.SHORT, e, e * 1.01, e - e * 0.025, "t", 0.8)
+    assert _patience(short(109.0), d).passed
+    assert not _patience(short(102.0), d).passed
+
+
+def test_patience_ignores_the_still_forming_daily_bar():
+    # Today's bar spikes to 200 -- if it were counted the range would be
+    # 100-200 and a long at 101 would still pass, but so would a long at 120,
+    # which is above the COMPLETED range high of 110.
+    d = _daily(today=(105.0, 200.0))
+    assert not _patience(_long_signal(120.0), d).passed
+
+
+def test_patience_waits_when_daily_data_is_missing():
+    chk = _patience(_long_signal(101.0), None)
+    assert not chk.passed and "waiting" in chk.detail
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

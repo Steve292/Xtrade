@@ -81,6 +81,21 @@ mt5_cent_account: true
 # scan: 4h sets direction, mt5_timeframe (15m) times the entry.
 mt5_watchlist: [XAUUSDc, BTCUSDc]
 
+# Per-symbol gate overrides (bot/runner.py), layered over `screening` below.
+# BTC patience gate, at explicit user request 2026-10-23: sit out the middle
+# of the last 30 completed daily candles' range -- longs only within 25% of
+# the range low, shorts only within 25% of the high. Backtested on 433 real
+# MT5 BTCUSDc signals (7 months, live spread): blocked trades lost -57.2R,
+# kept 98 made +7.2R (38% win) vs -50.0R ungated; production code replayed
+# identically. A loss filter (~breakeven), not a proven edge. Gold untested,
+# so not enabled there. It only ever blocks trades, never adds one.
+symbol_profiles:
+  BTCUSDc:
+    screening:
+      patience_enabled: true
+      patience_lookback: 30    # days -- the ~30-day bases on the 4h chart
+      patience_extreme: 0.25   # trade only the outer 25% of the range
+
 # Backtest defaults
 backtest_bars: 2000
 
@@ -137,8 +152,8 @@ screening:
 # Checked right before a --live order is sent; once halted it blocks new
 # entries until a new trading day starts or the balance recovers off its peak.
 capital_guard:
-  max_daily_loss_pct: 3.0
-  max_drawdown_pct: 10.0
+  max_daily_loss_pct: 10.0
+  max_drawdown_pct: 30.0
   max_concurrent_trades: 3
   # Raised from 3.0 at explicit user request: fixed_risk_usd above means a
   # single trade's risk_pct is now $3/combined_balance -- at the account's
