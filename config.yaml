@@ -137,8 +137,8 @@ screening:
 # Checked right before a --live order is sent; once halted it blocks new
 # entries until a new trading day starts or the balance recovers off its peak.
 capital_guard:
-  max_daily_loss_pct: 3.0
-  max_drawdown_pct: 10.0
+  max_daily_loss_pct: 10.0
+  max_drawdown_pct: 30.0
   max_concurrent_trades: 3
   # Raised from 3.0 at explicit user request: fixed_risk_usd above means a
   # single trade's risk_pct is now $3/combined_balance -- at the account's
