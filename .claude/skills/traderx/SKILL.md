@@ -44,6 +44,9 @@ All on 5m, take-profit/stop-loss-first, spread included unless noted. "R" = unit
 | Raw sweep-and-reclaim scalp (48 configs) | 0/48 profitable in both halves on BTC or gold | Rejected |
 | Book rules: 1h+4h trend agree + volume-weighted volatility range + sweep/higher-low | Binance BTC: recent +101R but previous month -37R. Binance PAXG: 12/12 positive. **Real MT5 XAUUSDc, 0.24 spread: 8/12 negative (~-62R)** | Rejected -- the PAXG edge did not survive the real instrument |
 
+| BTC bias filter: block longs when 4h close < SMA200 AND lower high (MT5 BTCUSDc 15m, 7 months, 433 raw signals, live spread) | Blocked longs were the BEST group (+1.4R, 35% win); filtered result -51.4R vs -50.0R baseline | Rejected -- momentum-decay read is for discretionary weekly calls, not a 15m filter |
+| (context) the bot's raw SMC signals, ungated | -0.12R/trade over 7 months; gates approved 2/433 | The gates are the edge -- never loosen them to "get trades" |
+
 Takeaway: on the operator's Exness account the 5m spread (BTC ~15, XAU ~0.24) consumes small scalp edges. Look for edges on 15m+ or in sizing/exits, and validate on MT5 data first.
 
 ## Known tooling bug
