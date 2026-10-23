@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Keeps the Mac from idle-sleeping so the TraderX loops keep scanning
+         and firing overnight. System sleep is set to 1 minute; without this
+         the loops freeze whenever nothing else holds the machine awake.
+         -i: no idle sleep. -s: no system sleep while on AC power.
+         Undo: launchctl unload ~/Library/LaunchAgents/com.smc.keepawake.plist -->
+    <key>Label</key>
+    <string>com.smc.keepawake</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>-s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
