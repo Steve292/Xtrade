@@ -658,6 +658,79 @@ def test_threshold_of_100_queues_all_but_a_perfect_score():
     assert result == 100.0 and len(calls) == 1
 
 
+# ---- scalp-profile opt-outs: require_ote / require_supply_demand ----------
+
+def test_require_ote_defaults_on():
+    assert ScreenConfig().require_ote is True
+    assert ScreenConfig().require_supply_demand is True
+
+
+def test_ote_opt_out_stops_the_ote_veto():
+    from dataclasses import replace
+    sig = _long_signal(110.0)  # at the high, outside the pocket
+    strict = TradeScreener(CFG).screen(sig, LTF, BULL_HTF)
+    loose = TradeScreener(replace(CFG, require_ote=False)).screen(sig, LTF, BULL_HTF)
+    assert not next(c for c in strict.checks if c.name == "Fibonacci OTE (final)").passed
+    ote = next(c for c in loose.checks if c.name == "Fibonacci OTE (final)")
+    assert ote.passed and "[not required]" in ote.detail
+
+
+def test_supply_demand_opt_out_stops_the_zone_veto():
+    from dataclasses import replace
+    sig = _long_signal(_pocket_mid())  # LTF has no demand zone at the pocket
+    strict = TradeScreener(CFG).screen(sig, LTF, BULL_HTF)
+    loose = TradeScreener(replace(CFG, require_supply_demand=False)).screen(sig, LTF, BULL_HTF)
+    if not next(c for c in strict.checks if c.name == "Supply/Demand").passed:
+        sd = next(c for c in loose.checks if c.name == "Supply/Demand")
+        assert sd.passed and "[not required]" in sd.detail
+
+
+def test_opt_outs_never_touch_the_other_gates():
+    """Turning both off must leave every other gate's verdict identical."""
+    from dataclasses import replace
+    sig = _long_signal(_pocket_mid(), rr=1.0)  # fails Risk/reward on purpose
+    strict = TradeScreener(CFG).screen(sig, LTF, BULL_HTF)
+    loose = TradeScreener(replace(CFG, require_ote=False, require_supply_demand=False)).screen(sig, LTF, BULL_HTF)
+    skip = {"Fibonacci OTE (final)", "Supply/Demand"}
+    assert ({c.name: c.passed for c in strict.checks if c.name not in skip}
+            == {c.name: c.passed for c in loose.checks if c.name not in skip})
+    assert not loose.approved  # Risk/reward still vetoes
+
+
+# ---- range-location gate ---------------------------------------------------
+
+def test_range_location_off_by_default_adds_no_check():
+    r = TradeScreener(CFG).screen(_long_signal(_pocket_mid()), LTF, BULL_HTF)
+    assert not any(c.name == "Range location" for c in r.checks)
+
+
+def _range_df(lo=100.0, hi=110.0, n=60):
+    rows = [{"timestamp": pd.Timestamp("2026-01-01") + pd.Timedelta(minutes=5 * i),
+             "open": (lo + hi) / 2, "high": hi if i == 10 else (lo + hi) / 2 + 1,
+             "low": lo if i == 20 else (lo + hi) / 2 - 1, "close": (lo + hi) / 2, "volume": 1}
+            for i in range(n)]
+    return pd.DataFrame(rows)
+
+
+def _range_check(sig, df, max_pos=0.4):
+    from dataclasses import replace
+    r = TradeScreener(replace(CFG, max_range_position=max_pos)).screen(sig, df, BULL_HTF)
+    return next(c for c in r.checks if c.name == "Range location")
+
+
+def test_long_low_in_range_passes_and_long_at_top_fails():
+    df = _range_df()  # range 100-110
+    assert _range_check(_long_signal(102.0), df).passed       # 20%
+    assert not _range_check(_long_signal(109.0), df).passed   # 90% -- chasing
+
+
+def test_short_location_is_mirrored_from_the_top():
+    df = _range_df()
+    short = lambda e: Signal(SignalType.SHORT, e, e * 1.01, e - e * 0.01 * 2.5, "t", 0.8)
+    assert _range_check(short(109.0), df).passed       # 10% from the top
+    assert not _range_check(short(101.0), df).passed   # selling the bottom
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

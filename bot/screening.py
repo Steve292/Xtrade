@@ -92,6 +92,23 @@ class ScreenConfig:
     # alone, with structure never actually having shifted in its favour.
     require_structure_shift: bool = False
     structure_shift_bars: int = 20
+    # Scalp profile opt-outs. Both default True (today's behaviour). In a
+    # choppy market neither condition forms often enough to ever pass: there
+    # is no clean impulse leg for an OTE pocket, and fresh supply/demand zones
+    # are rare -- measured 2026-10-23 on 5m BTC/gold, OTE failed 29/33 and
+    # 39/46 candidates, S/D 25/33 and 46/46. False keeps the check visible in
+    # the breakdown but stops it vetoing the trade.
+    require_supply_demand: bool = True
+    require_ote: bool = True
+    # Range-location gate (scalp profile). A long must sit in the bottom
+    # `max_range_position` fraction of the last `range_lookback_bars` bars'
+    # high-low range; a short in the mirror-image top fraction. 1.0 = off (no
+    # check is added at all, so the screen is bit-identical to before).
+    # Derived from the operator's 2026-10-23 BTC trades: every winner was
+    # bought at 32-41% of the 24h range, every loser at 89-98% (chasing a
+    # breakout) -- location alone separated all nine.
+    max_range_position: float = 1.0
+    range_lookback_bars: int = 288  # 24h of 5m bars; capped to the data given
 
     @classmethod
     def from_dict(cls, d: dict) -> "ScreenConfig":
@@ -180,6 +197,21 @@ class TradeScreener:
                  f"no {direction_word} BOS/CHoCH in {cfg.structure_shift_bars} bars"),
             ))
 
+        # 3c. Range location -- don't buy the top of the range / sell the
+        #     bottom. Off unless max_range_position < 1.0.
+        if cfg.max_range_position < 1.0:
+            window = df.iloc[-max(2, cfg.range_lookback_bars):]
+            r_lo, r_hi = float(window["low"].min()), float(window["high"].max())
+            pos = (signal.entry - r_lo) / (r_hi - r_lo) if r_hi > r_lo else 0.5
+            if direction == "short":
+                pos = 1.0 - pos  # distance from the TOP for a short
+            side_word = "from range low" if direction == "long" else "from range high"
+            checks.append(Check(
+                "Range location", pos <= cfg.max_range_position,
+                f"{pos:.0%} {side_word} over {len(window)} bars "
+                f"(max {cfg.max_range_position:.0%})",
+            ))
+
         # 4. Risk management — reward:risk and a valid stop
         risk = abs(signal.entry - signal.stop_loss)
         reward = abs(signal.take_profit - signal.entry)
@@ -210,23 +242,26 @@ class TradeScreener:
         at_zone = nearest_zone(signal.entry, sd_zones, want_zone) is not None
         n_zones = sum(1 for z in sd_zones if z.kind == want_zone)
         checks.append(Check(
-            "Supply/Demand", at_zone,
+            "Supply/Demand", at_zone or not cfg.require_supply_demand,
             f"{'in ' + want_zone + ' zone' if at_zone else 'not at a ' + want_zone + ' zone'} "
-            f"({n_zones} {want_zone} zone{'s' if n_zones != 1 else ''} active)",
+            f"({n_zones} {want_zone} zone{'s' if n_zones != 1 else ''} active)"
+            + ("" if cfg.require_supply_demand else " [not required]"),
         ))
 
         # 7. Fibonacci OTE — the FINAL gate: entry must be in the golden pocket
         #    of the recent leg. Runs last so a trade is only approved once every
         #    other condition holds AND price is at the optimal entry.
         leg = recent_leg(swings, direction)
+        optional = "" if cfg.require_ote else " [not required]"
         if leg is None:
-            checks.append(Check("Fibonacci OTE (final)", False, "no clean leg"))
+            checks.append(Check("Fibonacci OTE (final)", not cfg.require_ote,
+                                "no clean leg" + optional))
         else:
             lo, hi = ote_band(leg[0], leg[1], cfg.ote_low, cfg.ote_high)
             in_zone = lo <= signal.entry <= hi
             checks.append(Check(
-                "Fibonacci OTE (final)", in_zone,
-                f"entry {signal.entry:.4g} vs pocket {lo:.4g}-{hi:.4g}",
+                "Fibonacci OTE (final)", in_zone or not cfg.require_ote,
+                f"entry {signal.entry:.4g} vs pocket {lo:.4g}-{hi:.4g}" + optional,
             ))
 
         approved = all(c.passed for c in checks)

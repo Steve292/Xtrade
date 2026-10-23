@@ -38,8 +38,10 @@ stop_loss_pct: null
 # staged_fixed_risk_usd/risk_pct_for_fixed_usd).
 fixed_risk_usd:
   enabled: true
-  low: 3.0
-  high: 6.0
+  # $0.50/trade at explicit user request 2026-10-23 (was 3.0 / 6.0): $3 on a
+  # $5 balance was ~60% of the account per trade.
+  low: 0.5
+  high: 0.5
   threshold_usd: 100.0
 
 # Paper trading

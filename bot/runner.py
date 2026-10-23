@@ -62,17 +62,23 @@ def run_bot(config_path: str = "config.yaml") -> None:
     venue = config.get("venue", "cex")  # cex | evm | mt5
     mode = os.getenv("MODE", "paper")
 
-    strategy = SMCStrategy(
-        swing_lookback=config.get("swing_lookback", 5),
-        order_block_lookback=config.get("order_block_lookback", 20),
-        fvg_min_size_pct=config.get("fvg_min_size_pct", 0.001),
-        liquidity_tolerance_pct=config.get("liquidity_tolerance_pct", 0.0005),
-        reward_risk_ratio=config.get("reward_risk_ratio", 2.0),
-        stop_loss_pct=config.get("stop_loss_pct"),
-        extended_detectors=config.get("smc", {}).get("extended_detectors", False),
-        extended_max_adjust=config.get("smc", {}).get("extended_max_adjust", 0.10),
-        htf_neutral_credit=config.get("smc", {}).get("htf_neutral_credit", 0.0),
-        min_confidence=config.get("screening", {}).get("min_confidence", 0.55),
+    def _build_strategy(reward_risk_ratio, min_confidence):
+        return SMCStrategy(
+            swing_lookback=config.get("swing_lookback", 5),
+            order_block_lookback=config.get("order_block_lookback", 20),
+            fvg_min_size_pct=config.get("fvg_min_size_pct", 0.001),
+            liquidity_tolerance_pct=config.get("liquidity_tolerance_pct", 0.0005),
+            reward_risk_ratio=reward_risk_ratio,
+            stop_loss_pct=config.get("stop_loss_pct"),
+            extended_detectors=config.get("smc", {}).get("extended_detectors", False),
+            extended_max_adjust=config.get("smc", {}).get("extended_max_adjust", 0.10),
+            htf_neutral_credit=config.get("smc", {}).get("htf_neutral_credit", 0.0),
+            min_confidence=min_confidence,
+        )
+
+    strategy = _build_strategy(
+        config.get("reward_risk_ratio", 2.0),
+        config.get("screening", {}).get("min_confidence", 0.55),
     )
     # Same seven-gate screen the Hyperliquid path (hypertrade.py) has always
     # required — this loop previously entered on the raw SMC signal alone
@@ -81,6 +87,25 @@ def run_bot(config_path: str = "config.yaml") -> None:
     # scrutiny on top of the existing arm-gate/confidence-floor checks below,
     # it never loosens anything.
     screener = TradeScreener(ScreenConfig.from_dict(config.get("screening", {})))
+
+    # Per-symbol gate profiles (config.yaml symbol_profiles), at explicit user
+    # request: gold and BTC chop behave differently enough that one global
+    # gate set measurably helped one and hurt the other. Each profile layers
+    # its own `screening` keys and `reward_risk_ratio` over the shared ones; a
+    # symbol with no profile uses the shared strategy/screener unchanged.
+    symbol_strategies: dict = {}
+    symbol_screeners: dict = {}
+    for prof_sym, prof in (config.get("symbol_profiles") or {}).items():
+        prof = prof or {}
+        prof_screening = dict(config.get("screening", {}))
+        prof_screening.update(prof.get("screening") or {})
+        symbol_screeners[prof_sym] = TradeScreener(ScreenConfig.from_dict(prof_screening))
+        symbol_strategies[prof_sym] = _build_strategy(
+            prof.get("reward_risk_ratio", config.get("reward_risk_ratio", 2.0)),
+            prof_screening.get("min_confidence", 0.55),
+        )
+        print(f"  Profile {prof_sym}: RR {symbol_strategies[prof_sym].reward_risk_ratio}, "
+              f"gates {prof.get('screening') or {}}")
 
     symbol = config["symbol"]
     timeframe = config["timeframe"]
@@ -424,8 +449,10 @@ def run_bot(config_path: str = "config.yaml") -> None:
                         print(f"[{sym}] blocked by combined ledger: {combined_guard.halt_reason}")
                         continue
 
-                    signal = strategy.analyze(df, htf_df)
-                    screen_result = screener.screen(signal, df, htf_df) if signal.type != SignalType.NONE else None
+                    sym_strategy = symbol_strategies.get(sym, strategy)
+                    sym_screener = symbol_screeners.get(sym, screener)
+                    signal = sym_strategy.analyze(df, htf_df)
+                    screen_result = sym_screener.screen(signal, df, htf_df) if signal.type != SignalType.NONE else None
                     knowledge_result = (
                         knowledge_mod.score_signal(
                             signal.detectors, knowledge_index,
