@@ -181,7 +181,7 @@ class SMCStrategy:
         # Market structure
         swings = find_swing_points(df, self.swing_lookback)
         trend = detect_trend(swings)
-        events = detect_structure_breaks(df, swings)
+        events = detect_structure_breaks(df, swings, self.swing_lookback)
         zone = premium_discount_zone(df, swings)
 
         # HTF bias

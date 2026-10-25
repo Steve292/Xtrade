@@ -63,8 +63,8 @@ def _snapshot_for(sym: str, cfg: dict, mt5: MT5Client, strategy: SMCStrategy,
     hswings = find_swing_points(hdf, swing_lb)
     ltf_trend = detect_trend(lswings)
     htf_trend = detect_trend(hswings)
-    levents = detect_structure_breaks(df, lswings)
-    hevents = detect_structure_breaks(hdf, hswings)
+    levents = detect_structure_breaks(df, lswings, swing_lb)
+    hevents = detect_structure_breaks(hdf, hswings, swing_lb)
 
     pools = detect_liquidity_pools(df, cfg["liquidity_tolerance_pct"])
     sweep = recent_sweep(pools, df, bars=cfg["screening"].get("sweep_bars", 20))

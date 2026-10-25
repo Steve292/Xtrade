@@ -20,7 +20,7 @@ import pandas as pd
 from bot.screening import ScreenConfig, TradeScreener
 from bot.smc.liquidity import detect_liquidity_pools, recent_sweep
 from bot.smc.strategy import Signal, SignalType
-from bot.smc.structure import Trend
+from bot.smc.structure import StructureEvent, SwingPoint, Trend, detect_structure_breaks
 
 
 def _df(rows) -> pd.DataFrame:
@@ -265,3 +265,43 @@ def test_structure_gate_respects_the_recency_window():
     assert not s.passed, "a 5-bar window should not see a break 60 bars back"
     if f.passed:
         assert "ago" in f.detail
+
+
+def test_structure_break_is_indexed_at_the_close_through():
+    closes = [8, 9, 9, 9, 11, 11]
+    df = _df([
+        _bar(close, max(close, 10), min(close, 8), close)
+        for close in closes
+    ])
+    swings = [SwingPoint(index=1, price=10, kind="high")]
+
+    events = detect_structure_breaks(df, swings, lookback=1)
+
+    assert events == [
+        StructureEvent(index=4, kind="bos", direction="bullish", level=10)
+    ]
+
+
+def test_structure_break_ignores_a_wick_through_without_a_close():
+    closes = [8, 9, 9, 9, 9.5, 9.5]
+    rows = [
+        _bar(close, 11 if index == 4 else max(close, 10), min(close, 8), close)
+        for index, close in enumerate(closes)
+    ]
+    swings = [SwingPoint(index=1, price=10, kind="high")]
+
+    assert detect_structure_breaks(_df(rows), swings, lookback=1) == []
+
+
+def test_structure_break_does_not_backdate_a_level_broken_before_confirmation():
+    closes = [8, 9, 11, 11, 11, 11]
+    df = _df([
+        _bar(close, max(close, 11), min(close, 8), close)
+        for close in closes
+    ])
+    swings = [
+        SwingPoint(index=1, price=10, kind="high"),
+        SwingPoint(index=4, price=11, kind="high"),
+    ]
+
+    assert detect_structure_breaks(df, swings, lookback=1) == []

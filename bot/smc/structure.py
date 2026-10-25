@@ -67,44 +67,74 @@ def detect_trend(swings: list[SwingPoint]) -> Trend:
 
 
 def detect_structure_breaks(
-    df: pd.DataFrame, swings: list[SwingPoint]
+    df: pd.DataFrame, swings: list[SwingPoint], lookback: int = 5
 ) -> list[StructureEvent]:
-    """Detect BOS (continuation) and CHoCH (reversal) events."""
+    """Detect close-throughs of confirmed swing levels.
+
+    A swing is only available after its right-hand lookback has elapsed, and
+    an event is indexed at the candle that closes through the level.
+    """
     events: list[StructureEvent] = []
     trend = Trend.NEUTRAL
     last_high: SwingPoint | None = None
     last_low: SwingPoint | None = None
+    high_broken = False
+    low_broken = False
+    swing_index = 0
+    ordered_swings = sorted(swings, key=lambda swing: swing.index)
+    closes = df["close"].to_numpy()
+    confirmation_bars = max(0, lookback)
 
-    for swing in swings:
-        close_at_swing = float(df.iloc[swing.index]["close"])
+    for index in range(1, len(df)):
+        while (
+            swing_index < len(ordered_swings)
+            and ordered_swings[swing_index].index + confirmation_bars < index
+        ):
+            swing = ordered_swings[swing_index]
+            swing_index += 1
+            if swing.kind == "high":
+                last_high = swing
+                high_broken = False
+            elif swing.kind == "low":
+                last_low = swing
+                low_broken = False
 
-        if swing.kind == "high":
-            if last_high and close_at_swing > last_high.price:
-                kind = "choch" if trend == Trend.BEARISH else "bos"
-                events.append(
-                    StructureEvent(
-                        index=swing.index,
-                        kind=kind,
-                        direction="bullish",
-                        level=last_high.price,
-                    )
+        previous_close = float(closes[index - 1])
+        close = float(closes[index])
+        bullish_break = (
+            last_high is not None
+            and not high_broken
+            and previous_close <= last_high.price < close
+        )
+        bearish_break = (
+            last_low is not None
+            and not low_broken
+            and previous_close >= last_low.price > close
+        )
+
+        if bullish_break:
+            events.append(
+                StructureEvent(
+                    index=index,
+                    kind="choch" if trend == Trend.BEARISH else "bos",
+                    direction="bullish",
+                    level=last_high.price,
                 )
-                trend = Trend.BULLISH
-            last_high = swing
+            )
+            trend = Trend.BULLISH
+            high_broken = True
 
-        if swing.kind == "low":
-            if last_low and close_at_swing < last_low.price:
-                kind = "choch" if trend == Trend.BULLISH else "bos"
-                events.append(
-                    StructureEvent(
-                        index=swing.index,
-                        kind=kind,
-                        direction="bearish",
-                        level=last_low.price,
-                    )
+        if bearish_break:
+            events.append(
+                StructureEvent(
+                    index=index,
+                    kind="choch" if trend == Trend.BULLISH else "bos",
+                    direction="bearish",
+                    level=last_low.price,
                 )
-                trend = Trend.BEARISH
-            last_low = swing
+            )
+            trend = Trend.BEARISH
+            low_broken = True
 
     return events
 

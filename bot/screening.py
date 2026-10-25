@@ -196,7 +196,7 @@ class TradeScreener:
             # a silent mismatch here would make the gate reject everything.
             direction_word = "bullish" if direction == "long" else "bearish"
             swings = find_swing_points(df, cfg.swing_lookback)
-            events = detect_structure_breaks(df, swings)
+            events = detect_structure_breaks(df, swings, cfg.swing_lookback)
             cutoff = len(df) - cfg.structure_shift_bars
             aligned = [
                 e for e in events
