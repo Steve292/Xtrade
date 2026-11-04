@@ -51,6 +51,7 @@ All on 5m, take-profit/stop-loss-first, spread included unless noted. "R" = unit
 | Structure detection, swing-based (old) vs confirmed close-through (e7332e6). MT5, XAU 10 months / BTC 7 months | Raw signals: BTC -40.7R -> -29.2R, gold -1.2R -> -6.5R. Lookahead removed | Kept -- more honest, roughly neutral on results |
 | Market structure shift gate, value check | Passing it is WORSE than failing it: gold -0.15R vs +0.09R per trade, BTC -0.11R vs -0.03R (same under old detection) | Unproven gate -- review with a holdout before changing |
 | **All live gates together** (same A/B, no sleep, fixed sampling) | **0 fully approved signals** on XAU 10 months and BTC 7 months. S/D and OTE each fail ~87-90% of signals | The bot as configured almost never fires; any change needs a holdout |
+| Gate-combination holdout (128 on/off combos, MT5 15m, live spread, oldest 65% picks, newest 35% judges; smart-money score not modelled) | Pre-committed picks both FAILED: gold Sweep+Sniper+Patience +14.5R -> -0.4R unseen; BTC TopDown+Sweep+MSS+Sniper +4.6R -> -8.0R unseen. Median holdout -0.4R / -1.9R | Keep live gates. Sweep+Sniper+Patience (BTC +3.8R, gold -0.4R on 11-16 unseen trades) is a forward-watch idea only, not evidence |
 | (context) the bot's raw SMC signals, ungated | -0.12R/trade over 7 months; gates approved 2/433 | The gates are the edge -- never loosen them to "get trades" |
 
 Takeaway: on the operator's Exness account the 5m spread (BTC ~15, XAU ~0.24) consumes small scalp edges. Look for edges on 15m+ or in sizing/exits, and validate on MT5 data first.
