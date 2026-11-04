@@ -781,6 +781,24 @@ def test_patience_waits_when_daily_data_is_missing():
     assert not chk.passed and "waiting" in chk.detail
 
 
+# ---- symbol profiles resolve the same way everywhere ------------------------
+
+def test_screen_config_for_layers_the_profile_over_shared_screening():
+    from bot.screening import screen_config_for
+    c = {"screening": {"min_rr": 2.0, "sweep_bars": 20},
+         "symbol_profiles": {"BTCUSDc": {"screening": {"patience_enabled": True, "sweep_bars": 7}}}}
+    btc = screen_config_for(c, "BTCUSDc")
+    assert btc.patience_enabled and btc.sweep_bars == 7 and btc.min_rr == 2.0
+
+
+def test_screen_config_for_a_symbol_without_a_profile_is_the_shared_block():
+    from bot.screening import screen_config_for
+    c = {"screening": {"min_rr": 3.0}, "symbol_profiles": {"BTCUSDc": {"screening": {"patience_enabled": True}}}}
+    gold = screen_config_for(c, "XAUUSDc")
+    assert not gold.patience_enabled and gold.min_rr == 3.0
+    assert screen_config_for({"screening": {"min_rr": 3.0}}, "X").min_rr == 3.0  # no profiles at all
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

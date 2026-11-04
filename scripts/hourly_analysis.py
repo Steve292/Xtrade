@@ -31,7 +31,7 @@ from bot import knowledge as knowledge_mod, live_state
 from bot.hourly_report import SymbolSnapshot, build_report
 from bot.smc.candles import classify_candle, rejection_bias
 from bot.mt5.client import MT5Client
-from bot.screening import ScreenConfig, TradeScreener
+from bot.screening import ScreenConfig, TradeScreener, screen_config_for
 from bot.smc.fibonacci import ote_band, recent_leg
 from bot.smc.liquidity import detect_liquidity_pools, recent_sweep
 from bot.smc.strategy import SMCStrategy, SignalType
@@ -111,7 +111,14 @@ def _snapshot_for(sym: str, cfg: dict, mt5: MT5Client, strategy: SMCStrategy,
     )
 
     if sig.type is not SignalType.NONE:
-        sr = screener.screen(sig, df, hdf)
+        sym_screener = TradeScreener(screen_config_for(cfg, sym))
+        daily_df = None
+        if sym_screener.cfg.patience_enabled:
+            try:
+                daily_df = mt5.copy_rates(sym, "1d", sym_screener.cfg.patience_lookback + 2)
+            except Exception as e:
+                print(f"[{sym}] daily candles unavailable ({type(e).__name__})")
+        sr = sym_screener.screen(sig, df, hdf, context_df=daily_df)
         kr = knowledge_mod.score_signal(sig.detectors, index) if index.available else None
         unified = evaluate_unified(
             sig, sr, "NEUTRAL", 0, 0, knowledge_result=kr,

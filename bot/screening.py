@@ -128,6 +128,18 @@ class ScreenConfig:
         return cls(**{k: d[k] for k in cls.__dataclass_fields__ if k in d})
 
 
+def screen_config_for(config: dict, symbol: str) -> ScreenConfig:
+    """The ScreenConfig that actually applies to `symbol`: `screening` with that
+    symbol's `symbol_profiles` overrides layered on top. Every path that judges
+    a symbol must build its screener here. The dashboard scan and the hourly
+    report used to take the shared block alone, so they skipped BTC's patience
+    gate and could show as approved a setup the live loop would refuse."""
+    merged = dict(config.get("screening") or {})
+    profile = (config.get("symbol_profiles") or {}).get(symbol) or {}
+    merged.update(profile.get("screening") or {})
+    return ScreenConfig.from_dict(merged)
+
+
 class TradeScreener:
     def __init__(self, config: ScreenConfig | None = None):
         self.cfg = config or ScreenConfig()
