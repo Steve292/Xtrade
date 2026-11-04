@@ -32,7 +32,7 @@ from bot.position_sizing import (
 )
 from bot import knowledge as knowledge_mod
 from bot.risk import calc_lot_size, calc_position_size
-from bot.screening import ScreenConfig, TradeScreener
+from bot.screening import ScreenConfig, TradeScreener, screen_config_for
 from bot.smc.strategy import SMCStrategy, SignalType
 from bot.unified_screen import evaluate_unified
 from bot.wallet import DefiWallet
@@ -97,12 +97,11 @@ def run_bot(config_path: str = "config.yaml") -> None:
     symbol_screeners: dict = {}
     for prof_sym, prof in (config.get("symbol_profiles") or {}).items():
         prof = prof or {}
-        prof_screening = dict(config.get("screening", {}))
-        prof_screening.update(prof.get("screening") or {})
-        symbol_screeners[prof_sym] = TradeScreener(ScreenConfig.from_dict(prof_screening))
+        prof_config = screen_config_for(config, prof_sym)
+        symbol_screeners[prof_sym] = TradeScreener(prof_config)
         symbol_strategies[prof_sym] = _build_strategy(
             prof.get("reward_risk_ratio", config.get("reward_risk_ratio", 2.0)),
-            prof_screening.get("min_confidence", 0.55),
+            prof_config.min_confidence,
         )
         print(f"  Profile {prof_sym}: RR {symbol_strategies[prof_sym].reward_risk_ratio}, "
               f"gates {prof.get('screening') or {}}")

@@ -46,7 +46,7 @@ from bot.marketdata import binance_symbol, coingecko_top_by_market_cap
 from bot.mt5.client import MT5Client
 from bot import pending_trades
 from bot.position_sizing import risk_pct_for_fixed_usd, staged_fixed_risk_usd
-from bot.screening import ScreenConfig, TradeScreener
+from bot.screening import ScreenConfig, TradeScreener, screen_config_for
 from bot.smc.strategy import SMCStrategy, SignalType
 from bot.unified_screen import evaluate_unified
 from bot.wallet import DefiWallet
@@ -736,7 +736,6 @@ def _scan_mt5_rows() -> list[dict]:
         htf_neutral_credit=CFG.get("smc", {}).get("htf_neutral_credit", 0.0),
         min_confidence=CFG.get("screening", {}).get("min_confidence", 0.55),
     )
-    screener = TradeScreener(ScreenConfig.from_dict(CFG.get("screening", {})))
     ltf = CFG.get("mt5_timeframe", CFG.get("timeframe", "15m"))
     htf = CFG.get("higher_timeframe", "1h")
     symbols = CFG.get("mt5_watchlist") or [CFG.get("mt5_symbol", "EURUSDc")]
@@ -756,7 +755,15 @@ def _scan_mt5_rows() -> list[dict]:
                 row.update(status="no_setup", reason=signal.reason)
                 out.append(row)
                 continue
-            result = screener.screen(signal, df, htf_df)
+            sym_screener = TradeScreener(screen_config_for(CFG, symbol))
+            daily_df = None
+            if sym_screener.cfg.patience_enabled:
+                try:
+                    daily_df = mt5.copy_rates(symbol, "1d", count=sym_screener.cfg.patience_lookback + 2)
+                except Exception as e:
+                    # Same as the live loop: no daily data means the gate waits.
+                    print(f"  [scan] {symbol} daily candles unavailable ({type(e).__name__})")
+            result = sym_screener.screen(signal, df, htf_df, context_df=daily_df)
             kr = (
                 knowledge_mod.score_signal(
                     signal.detectors, mt5_knowledge_index,

@@ -31,7 +31,7 @@ from bot import knowledge as knowledge_mod, live_state
 from bot.hourly_report import SymbolSnapshot, build_report
 from bot.smc.candles import classify_candle, rejection_bias
 from bot.mt5.client import MT5Client
-from bot.screening import ScreenConfig, TradeScreener
+from bot.screening import TradeScreener, screen_config_for
 from bot.smc.fibonacci import ote_band, recent_leg
 from bot.smc.liquidity import detect_liquidity_pools, recent_sweep
 from bot.smc.strategy import SMCStrategy, SignalType
@@ -51,7 +51,7 @@ def _last_event_str(events, df, swing_lookback) -> str | None:
 
 
 def _snapshot_for(sym: str, cfg: dict, mt5: MT5Client, strategy: SMCStrategy,
-                  screener: TradeScreener, index) -> SymbolSnapshot:
+                  index) -> SymbolSnapshot:
     ltf, htf = cfg["mt5_timeframe"], cfg["higher_timeframe"]
     df = mt5.copy_rates(sym, ltf, count=200)
     hdf = mt5.copy_rates(sym, htf, count=100)
@@ -111,7 +111,14 @@ def _snapshot_for(sym: str, cfg: dict, mt5: MT5Client, strategy: SMCStrategy,
     )
 
     if sig.type is not SignalType.NONE:
-        sr = screener.screen(sig, df, hdf)
+        sym_screener = TradeScreener(screen_config_for(cfg, sym))
+        daily_df = None
+        if sym_screener.cfg.patience_enabled:
+            try:
+                daily_df = mt5.copy_rates(sym, "1d", sym_screener.cfg.patience_lookback + 2)
+            except Exception as e:
+                print(f"[{sym}] daily candles unavailable ({type(e).__name__})")
+        sr = sym_screener.screen(sig, df, hdf, context_df=daily_df)
         kr = knowledge_mod.score_signal(sig.detectors, index) if index.available else None
         unified = evaluate_unified(
             sig, sr, "NEUTRAL", 0, 0, knowledge_result=kr,
@@ -146,12 +153,11 @@ def main() -> None:
         htf_neutral_credit=cfg.get("smc", {}).get("htf_neutral_credit", 0.0),
         min_confidence=cfg.get("screening", {}).get("min_confidence", 0.55),
     )
-    screener = TradeScreener(ScreenConfig.from_dict(cfg.get("screening", {})))
     kcfg = cfg.get("knowledge", {})
     index = (knowledge_mod.build_index(kcfg.get("corpus_path"), kcfg.get("cache_path"))
             if kcfg.get("enabled") else knowledge_mod.KnowledgeIndex())
 
-    snapshots = [_snapshot_for(sym, cfg, mt5, strategy, screener, index)
+    snapshots = [_snapshot_for(sym, cfg, mt5, strategy, index)
                 for sym in cfg["mt5_watchlist"]]
 
     generated_at = time.strftime("%Y-%m-%d %H:%M:%S %Z")

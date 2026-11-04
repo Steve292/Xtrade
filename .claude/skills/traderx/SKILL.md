@@ -14,7 +14,7 @@ description: "The real TraderX trading bot (/Users/mac/Projects/smc-trading-bot)
 - MT5 loop: `main.py` -> `bot/runner.py` (launchd `com.smc.mt5autotrader`). Hyperliquid: `hypertrade.py` (`com.smc.autotrader`). Dashboard: `webapp/server.py`, port 8420 (`com.smc.webapp`). Bridge: `com.smc.mt5bridge` (port 18812).
 - Signal: `bot/smc/strategy.py` `SMCStrategy` -- internal floor `min_confidence` (wired to `screening.min_confidence`). `htf_neutral_credit` is PRE-gate (changes which bars signal); `extended_detectors` is post-gate (confidence only).
 - Gates: `bot/screening.py` `TradeScreener` -- SMC confluence, top-down, liquidity sweep, (opt) structure shift, (opt) range location, R:R, sniper, supply/demand (opt-out), Fibonacci OTE (opt-out).
-- Per-symbol gate overrides: `config.yaml` `symbol_profiles: {SYM: {reward_risk_ratio, screening: {...}}}` (none configured).
+- Per-symbol gate overrides: `config.yaml` `symbol_profiles: {SYM: {reward_risk_ratio, screening: {...}}}` (BTCUSDc patience gate configured). Resolve through `bot.screening.screen_config_for(config, symbol)`, never the bare `screening` block.
 - Blend: `bot/unified_screen.py` `final_pct`; auto-fire when `final_pct >= live_state.auto_fire_pct`, else queued for dashboard approval.
 - Sizing: `fixed_risk_usd` (dollars/trade) -> `bot/position_sizing.py` chain -> dollar ceiling. Capital guard: `bot/capital_guard.py`.
 - Health check first: if every service is crash-looping with `ModuleNotFoundError: bot`, the working tree lost `bot/`/`webapp/` -- `git restore -- bot webapp engine` (happened 2026-09-16, ~5 weeks down unnoticed).
@@ -48,6 +48,9 @@ All on 5m, take-profit/stop-loss-first, spread included unless noted. "R" = unit
 | BTC patience gate (30-day daily range, longs only bottom 25%, shorts only top 25%) | Blocked -57.2R, kept 98 at +7.2R (38% win) vs -50.0R; production replay identical | **LIVE for BTCUSDc** via symbol_profiles -- a loss filter, ~breakeven |
 | "Wait for a breakout close, then trade that direction" (D1/W1 boxes) | Negative in every variant | Rejected |
 | Support/resistance targets (TP just before next 1h swing level, skip < 1.5R; also stop beyond S/R) | Alone -51.7R -> -2.4R (by skipping trades into nearby resistance). WITH patience: fixed 2R +5.8R beats S/R TP +2.1R / -0.5R | Rejected -- patience already encodes the operator's S/R principle |
+| Structure detection, swing-based (old) vs confirmed close-through (e7332e6). MT5, XAU 10 months / BTC 7 months | Raw signals: BTC -40.7R -> -29.2R, gold -1.2R -> -6.5R. Lookahead removed | Kept -- more honest, roughly neutral on results |
+| Market structure shift gate, value check | Passing it is WORSE than failing it: gold -0.15R vs +0.09R per trade, BTC -0.11R vs -0.03R (same under old detection) | Unproven gate -- review with a holdout before changing |
+| **All live gates together** (same A/B, no sleep, fixed sampling) | **0 fully approved signals** on XAU 10 months and BTC 7 months. S/D and OTE each fail ~87-90% of signals | The bot as configured almost never fires; any change needs a holdout |
 | (context) the bot's raw SMC signals, ungated | -0.12R/trade over 7 months; gates approved 2/433 | The gates are the edge -- never loosen them to "get trades" |
 
 Takeaway: on the operator's Exness account the 5m spread (BTC ~15, XAU ~0.24) consumes small scalp edges. Look for edges on 15m+ or in sizing/exits, and validate on MT5 data first.
