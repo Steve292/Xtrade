@@ -348,5 +348,18 @@ def _run_all():
     return failed
 
 
+def test_balance_floor_blocks_a_trade_that_could_end_below_it():
+    from bot.capital_guard import breaches_balance_floor as b
+    assert not b(4.80, 0.50, 4.0)   # would end at 4.30
+    assert not b(4.50, 0.50, 4.0)   # exactly at the floor is allowed
+    assert b(4.30, 0.50, 4.0)       # would end at 3.80
+    assert b(3.90, 0.01, 4.0)       # already under it
+
+
+def test_balance_floor_of_zero_is_off():
+    from bot.capital_guard import breaches_balance_floor as b
+    assert not b(0.10, 5.0, 0.0)
+
+
 if __name__ == "__main__":
     sys.exit(1 if _run_all() else 0)

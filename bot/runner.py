@@ -8,7 +8,7 @@ import yaml
 from dotenv import load_dotenv
 
 from bot import live_state
-from bot.capital_guard import CapitalGuard, trading_day
+from bot.capital_guard import CapitalGuard, trading_day, breaches_balance_floor
 from bot.combined_ledger import fetch_combined_balance, reconnect_if_needed
 from bot.exchange import Exchange
 from bot.evm.dex import EVMDex
@@ -118,6 +118,8 @@ def run_bot(config_path: str = "config.yaml") -> None:
     # combined balance below, not applied here since that balance isn't
     # known yet at startup.
     fixed_risk_cfg = config.get("fixed_risk_usd", {})
+    # Hard account floor, checked per trade below. 0 / unset = off.
+    min_balance_usd = float(config.get("min_balance_usd", 0.0) or 0.0)
     # Adaptive sizing (bot/position_sizing.py's multiplier chain) and the
     # knowledge confluence layer. Both OFF unless config.yaml turns them on;
     # with both off this loop behaves exactly as it did before they existed.
@@ -592,6 +594,19 @@ def run_bot(config_path: str = "config.yaml") -> None:
                             size = calc_position_size(
                                 balance, signal.entry, signal.stop_loss, effective_risk_pct
                             )
+
+                        # Hard balance floor. Uses the risk of the ACTUAL lot size,
+                        # not the requested dollars: a lot clamped up to the broker
+                        # minimum can risk more than asked.
+                        if size > 0 and broker is not None and min_balance_usd > 0:
+                            info = broker.get_symbol_info()
+                            trade_risk_usd = (abs(signal.entry - signal.stop_loss) / info.tick_size
+                                              * info.tick_value * size / cent_divisor)
+                            floor_balance_usd = balance / cent_divisor
+                            if breaches_balance_floor(floor_balance_usd, trade_risk_usd, min_balance_usd):
+                                print(f"[{sym}] blocked by balance floor: ${floor_balance_usd:.2f} - "
+                                      f"${trade_risk_usd:.2f} risk would be under ${min_balance_usd:.2f}")
+                                size = 0
 
                         if size > 0:
                             # Arm gate: in live mode, place a real order ONLY when

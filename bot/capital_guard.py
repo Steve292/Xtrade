@@ -55,6 +55,15 @@ _NY_TZ = ZoneInfo("America/New_York")
 _SESSION_ROLLOVER_HOUR = 17  # 5pm ET — standard forex/CFD daily market close & rollover
 
 
+def breaches_balance_floor(balance_usd: float, trade_risk_usd: float, floor_usd: float) -> bool:
+    """True when a full stop-out of this trade would leave the account below
+    the operator's hard floor (config.yaml min_balance_usd). Checked BEFORE
+    entry, so the floor holds through the trade rather than only being
+    noticed afterwards. A floor of 0 or less is off. A gap through the stop
+    can still land below it; that is a limit of stops, not of this check."""
+    return floor_usd > 0 and balance_usd - trade_risk_usd < floor_usd
+
+
 def trading_day(now: datetime | None = None) -> date:
     """The current trading day/session, per the industry-standard forex/CFD
     daily close: 5pm America/New_York — not local midnight. A session

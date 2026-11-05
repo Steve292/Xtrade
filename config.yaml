@@ -36,6 +36,10 @@ stop_loss_pct: null
 # threshold_usd, $6/trade once it reaches or exceeds it. Recomputed fresh
 # every pass against the live combined balance (bot/position_sizing.py's
 # staged_fixed_risk_usd/risk_pct_for_fixed_usd).
+# Hard account floor in USD, at explicit user request 2026-11-04: no new MT5
+# trade if a full loss on it would leave the balance below this. 0 = off.
+min_balance_usd: 4.0
+
 fixed_risk_usd:
   enabled: true
   # $0.50/trade at explicit user request 2026-10-23 (was 3.0 / 6.0): $3 on a
