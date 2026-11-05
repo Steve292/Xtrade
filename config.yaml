@@ -38,7 +38,7 @@ stop_loss_pct: null
 # staged_fixed_risk_usd/risk_pct_for_fixed_usd).
 # Hard account floor in USD, at explicit user request 2026-11-04: no new MT5
 # trade if a full loss on it would leave the balance below this. 0 = off.
-min_balance_usd: 4.0
+min_balance_usd: 1.8
 
 fixed_risk_usd:
   enabled: true
