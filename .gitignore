@@ -55,3 +55,7 @@ trade_grades.json
 logs/hourly_analysis.log
 logs/hourly-analysis-launchd.log
 hourly_analysis_latest.json
+
+# Shadow tracker ledger (runtime state)
+shadow_state.json
+shadow_state.tmp
