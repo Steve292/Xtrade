@@ -42,11 +42,12 @@ min_balance_usd: 4.0
 
 fixed_risk_usd:
   enabled: true
-  # $1.80/trade at explicit user request 2026-11-04 (was 0.50). Earlier: $0.50/trade
+  # $0.80/trade at explicit user request 2026-11-04: the most that keeps one
+  # full loss at or above the $4 floor from $4.80. Earlier: $0.50/trade
   # at explicit user request 2026-10-23 (was 3.0 / 6.0): $3 on a
   # $5 balance was ~60% of the account per trade.
-  low: 1.8
-  high: 1.8
+  low: 0.8
+  high: 0.8
   threshold_usd: 100.0
 
 # Paper trading
