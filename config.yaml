@@ -42,10 +42,11 @@ min_balance_usd: 4.0
 
 fixed_risk_usd:
   enabled: true
-  # $0.50/trade at explicit user request 2026-10-23 (was 3.0 / 6.0): $3 on a
+  # $1.80/trade at explicit user request 2026-11-04 (was 0.50). Earlier: $0.50/trade
+  # at explicit user request 2026-10-23 (was 3.0 / 6.0): $3 on a
   # $5 balance was ~60% of the account per trade.
-  low: 0.5
-  high: 0.5
+  low: 1.8
+  high: 1.8
   threshold_usd: 100.0
 
 # Paper trading
@@ -279,7 +280,7 @@ position_sizing:
   # chain (regime/hotness/volatility are the others, tied to market
   # conditions rather than this setup's own strength) -- raising this ceiling
   # widens what ALL four together can reach, not confidence alone.
-  max_multiple: 1.25
+  max_multiple: 1.0  # 1.25 -> 1.0 so $1.80 is the real ceiling, not $2.25
   max_risk_usd: 5.0      # ...and never more than this many dollars, ever
   # confidence_only, at explicit user request: when true, size purely on the
   # setup's own confidence -- regime_alloc_weight/hotness_multiplier/
