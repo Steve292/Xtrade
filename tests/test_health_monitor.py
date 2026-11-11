@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from health_monitor import Alerter, find_problems
+from health_monitor import Alerter, Watchdog, find_problems
 
 OK = ["[XAUUSDc] [2026-11-05 11:15:00] No signal", "[BTCUSDc] [2026-11-05 11:15:00] SIGNAL LONG rejected"]
 
@@ -47,3 +47,32 @@ def test_alerts_after_15_minutes_repeats_hourly_then_recovers():
     assert "Down 75 min" in a.update(["x"], 4500)
     assert "Recovered" in a.update([], 4600)
     assert a.update([], 4700) is None
+
+
+MT5_DOWN = ["live bot can't read MT5"]
+
+
+def test_watchdog_waits_10_minutes_and_ignores_other_problems():
+    w = Watchdog()
+    assert not w.due(MT5_DOWN, 0) and not w.due(MT5_DOWN, 500)
+    assert w.due(MT5_DOWN, 600)
+    assert not Watchdog().due(["shadow tracker has stopped completing passes"], 10_000)
+
+
+def test_watchdog_spaces_restarts_and_gives_up_after_three():
+    w = Watchdog()
+    w.due(MT5_DOWN, 0)
+    t = 600
+    for _ in range(3):
+        assert w.due(MT5_DOWN, t)
+        w.record(t)
+        assert not w.due(MT5_DOWN, t + 60)       # 30 min spacing
+        t += 1800
+    assert not w.due(MT5_DOWN, t) and w.gave_up
+
+
+def test_watchdog_resets_once_mt5_recovers():
+    w = Watchdog()
+    w.due(MT5_DOWN, 0); w.record(600)
+    assert not w.due([], 700)
+    assert not w.due(MT5_DOWN, 800)              # a fresh 10-minute wait
